@@ -1,0 +1,13 @@
+{
+  "name": "public-speaking-coach",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build:web": "npm --workspace @public-speaking-coach/web run build",
+    "lint:web": "npm --workspace @public-speaking-coach/web run lint",
+    "dev:web": "npm --workspace @public-speaking-coach/web run dev"
+  }
+}

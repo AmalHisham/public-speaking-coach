@@ -1,0 +1,16 @@
+node_modules/
+.next/
+out/
+dist/
+coverage/
+
+apps/api/.venv/
+apps/api/__pycache__/
+apps/api/**/*.pyc
+apps/api/**/__pycache__/
+apps/api/.env
+apps/api/.env.*
+!apps/api/.env.example
+
+.DS_Store
+Thumbs.db
