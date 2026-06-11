@@ -1,4 +1,6 @@
-from app.core.config import Settings
+from pathlib import Path
+
+from app.core.config import ENV_FILE, Settings
 
 
 def test_database_url_builds_with_sqlalchemy_url_encoding() -> None:
@@ -36,3 +38,9 @@ def test_settings_reads_nested_query_parameters_from_environment(
         "sslmode": "require",
         "channel_binding": "require",
     }
+
+
+def test_settings_env_file_is_resolved_from_app_directory() -> None:
+    assert ENV_FILE.is_absolute()
+    assert ENV_FILE == Path(__file__).resolve().parents[1] / ".env"
+    assert Settings.model_config["env_file"] == str(ENV_FILE)

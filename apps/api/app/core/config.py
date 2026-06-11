@@ -1,8 +1,12 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
+
+APP_DIR = Path(__file__).resolve().parents[2]
+ENV_FILE = APP_DIR / ".env"
 
 
 class Settings(BaseSettings):
@@ -14,7 +18,7 @@ class Settings(BaseSettings):
     database_query: dict[str, str] = Field(default_factory=dict)
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
         env_nested_delimiter="__",
         extra="ignore",
