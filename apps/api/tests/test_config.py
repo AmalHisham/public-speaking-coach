@@ -40,6 +40,35 @@ def test_settings_reads_nested_query_parameters_from_environment(
     }
 
 
+def test_settings_reads_csv_auth_configuration_from_environment(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DATABASE_HOST", "localhost")
+    monkeypatch.setenv("DATABASE_PORT", "5432")
+    monkeypatch.setenv("DATABASE_NAME", "public_speaking_coach")
+    monkeypatch.setenv("DATABASE_USER", "postgres")
+    monkeypatch.setenv("DATABASE_PASSWORD", "postgres")
+    monkeypatch.setenv(
+        "CLERK_AUTHORIZED_PARTIES",
+        "http://localhost:3000, https://coach.example.com",
+    )
+    monkeypatch.setenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:3000, https://coach.example.com",
+    )
+
+    settings = Settings()
+
+    assert settings.clerk_authorized_parties == (
+        "http://localhost:3000",
+        "https://coach.example.com",
+    )
+    assert settings.cors_allowed_origins == (
+        "http://localhost:3000",
+        "https://coach.example.com",
+    )
+
+
 def test_settings_env_file_is_resolved_from_app_directory() -> None:
     assert ENV_FILE.is_absolute()
     assert ENV_FILE == Path(__file__).resolve().parents[1] / ".env"
