@@ -6,50 +6,121 @@ import {
   initialSessionState,
   transitionSessionState,
 } from "@/features/session/lib/session-state-machine";
+import {
+  initialCameraState,
+  type CameraState,
+  requestWebcamPermission,
+  stopWebcamStream,
+} from "@/features/session/lib/webcam-permission";
 import type { SessionEvent, SessionMachineState } from "@/types/session";
 
-type SessionStore = SessionMachineState & {
+type SessionStoreState = SessionMachineState & {
+  camera: CameraState;
+};
+
+type SessionStore = SessionStoreState & {
   completeStop: () => void;
   failActive: (error: string) => void;
   failStart: (error: string) => void;
   markActive: () => void;
-  requestStart: () => void;
+  requestStart: () => Promise<void>;
   requestStop: () => void;
   reset: () => void;
-  send: (event: SessionEvent) => void;
 };
 
-function applyEvent(
-  state: SessionMachineState,
+function applyLifecycleEvent(
+  state: SessionStoreState,
   event: SessionEvent,
-): SessionMachineState {
-  return transitionSessionState(state, event);
+  camera: CameraState = state.camera,
+): SessionStoreState {
+  return {
+    ...transitionSessionState(state, event),
+    camera,
+  };
 }
 
-export const useSessionStore = create<SessionStore>((set) => ({
-  ...initialSessionState,
-  completeStop: () => {
-    set((state) => applyEvent(state, { type: "STOP_SUCCESS" }));
-  },
-  failActive: (error) => {
-    set((state) => applyEvent(state, { error, type: "RUNTIME_FAILURE" }));
-  },
-  failStart: (error) => {
-    set((state) => applyEvent(state, { error, type: "START_FAILURE" }));
-  },
-  markActive: () => {
-    set((state) => applyEvent(state, { type: "START_SUCCESS" }));
-  },
-  requestStart: () => {
-    set((state) => applyEvent(state, { type: "START_REQUEST" }));
-  },
-  requestStop: () => {
-    set((state) => applyEvent(state, { type: "STOP_REQUEST" }));
-  },
-  reset: () => {
-    set((state) => applyEvent(state, { type: "RESET" }));
-  },
-  send: (event) => {
-    set((state) => applyEvent(state, event));
-  },
-}));
+export const useSessionStore = create<SessionStore>((set) => {
+  const updateState = (updater: (state: SessionStoreState) => SessionStoreState) =>
+    set((state) => {
+      const nextState = updater(state);
+
+      if (
+        state.camera.stream !== null &&
+        state.camera.stream !== nextState.camera.stream
+      ) {
+        stopWebcamStream(state.camera.stream);
+      }
+
+      return nextState;
+    });
+
+  return {
+    ...initialSessionState,
+    camera: initialCameraState,
+    completeStop: () => {
+      updateState((state) =>
+        applyLifecycleEvent(state, { type: "STOP_SUCCESS" }, {
+          ...state.camera,
+          stream: null,
+        }),
+      );
+    },
+    failActive: (error) => {
+      updateState((state) =>
+        applyLifecycleEvent(state, { error, type: "RUNTIME_FAILURE" }, {
+          ...state.camera,
+          stream: null,
+        }),
+      );
+    },
+    failStart: (error) => {
+      updateState((state) =>
+        applyLifecycleEvent(state, { error, type: "START_FAILURE" }, {
+          ...state.camera,
+          stream: null,
+        }),
+      );
+    },
+    markActive: () => {
+      updateState((state) => applyLifecycleEvent(state, { type: "START_SUCCESS" }));
+    },
+    requestStart: async () => {
+      updateState((state) =>
+        applyLifecycleEvent(state, { type: "START_REQUEST" }, initialCameraState),
+      );
+
+      const result = await requestWebcamPermission();
+
+      if (result.status === "granted") {
+        updateState((state) => ({
+          ...state,
+          camera: {
+            permission: result.permission,
+            stream: result.stream,
+          },
+        }));
+
+        return;
+      }
+
+      updateState((state) =>
+        applyLifecycleEvent(
+          state,
+          { error: result.error, type: "START_FAILURE" },
+          {
+            permission: result.permission,
+            stream: null,
+          },
+        ),
+      );
+    },
+    requestStop: () => {
+      updateState((state) => applyLifecycleEvent(state, { type: "STOP_REQUEST" }));
+    },
+    reset: () => {
+      updateState((state) =>
+        applyLifecycleEvent(state, { type: "RESET" }, initialCameraState),
+      );
+    },
+  };
+});
