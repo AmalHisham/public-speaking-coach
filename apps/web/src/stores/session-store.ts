@@ -7,6 +7,12 @@ import {
   transitionSessionState,
 } from "@/features/session/lib/session-state-machine";
 import {
+  initialSessionTimerState,
+  startSessionTimer,
+  stopSessionTimer,
+  type SessionTimerState,
+} from "@/features/session/lib/session-timer";
+import {
   initialMicrophoneState,
   type MicrophoneState,
   requestMicrophonePermission,
@@ -23,6 +29,7 @@ import type { SessionEvent, SessionMachineState } from "@/types/session";
 type SessionStoreState = SessionMachineState & {
   camera: CameraState;
   microphone: MicrophoneState;
+  timer: SessionTimerState;
 };
 
 type SessionStore = SessionStoreState & {
@@ -37,11 +44,13 @@ function applyLifecycleEvent(
   event: SessionEvent,
   camera: CameraState = state.camera,
   microphone: MicrophoneState = state.microphone,
+  timer: SessionTimerState = state.timer,
 ): SessionStoreState {
   return {
     ...transitionSessionState(state, event),
     camera,
     microphone,
+    timer,
   };
 }
 
@@ -69,7 +78,13 @@ export const useSessionStore = create<SessionStore>((set) => {
 
   const completeStart = (microphone: MicrophoneState) => {
     updateState((state) =>
-      applyLifecycleEvent(state, { type: "START_SUCCESS" }, state.camera, microphone),
+      applyLifecycleEvent(
+        state,
+        { type: "START_SUCCESS" },
+        state.camera,
+        microphone,
+        startSessionTimer(),
+      ),
     );
   };
 
@@ -86,6 +101,7 @@ export const useSessionStore = create<SessionStore>((set) => {
           ...state.microphone,
           stream: null,
         },
+        state.timer,
       ),
     );
   };
@@ -104,6 +120,7 @@ export const useSessionStore = create<SessionStore>((set) => {
           stream: null,
         },
         microphone,
+        initialSessionTimerState,
       ),
     );
   };
@@ -112,6 +129,7 @@ export const useSessionStore = create<SessionStore>((set) => {
     ...initialSessionState,
     camera: initialCameraState,
     microphone: initialMicrophoneState,
+    timer: initialSessionTimerState,
     failActive: (error) => {
       updateState((state) =>
         applyLifecycleEvent(
@@ -125,6 +143,7 @@ export const useSessionStore = create<SessionStore>((set) => {
             ...state.microphone,
             stream: null,
           },
+          stopSessionTimer(state.timer),
         ),
       );
     },
@@ -135,6 +154,7 @@ export const useSessionStore = create<SessionStore>((set) => {
           { type: "START_REQUEST" },
           initialCameraState,
           initialMicrophoneState,
+          initialSessionTimerState,
         ),
       );
 
@@ -182,7 +202,15 @@ export const useSessionStore = create<SessionStore>((set) => {
       );
     },
     requestStop: async () => {
-      updateState((state) => applyLifecycleEvent(state, { type: "STOP_REQUEST" }));
+      updateState((state) =>
+        applyLifecycleEvent(
+          state,
+          { type: "STOP_REQUEST" },
+          state.camera,
+          state.microphone,
+          stopSessionTimer(state.timer),
+        ),
+      );
 
       await Promise.resolve();
 
@@ -195,6 +223,7 @@ export const useSessionStore = create<SessionStore>((set) => {
           { type: "RESET" },
           initialCameraState,
           initialMicrophoneState,
+          initialSessionTimerState,
         ),
       );
     },

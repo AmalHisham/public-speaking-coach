@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { SessionDuration } from "@/features/session/components/session-duration";
 import { getSessionControlsViewModel } from "@/features/session/lib/session-controls";
 import { useSessionStore } from "@/stores/session-store";
 import type { SessionStatus } from "@/types/session";
@@ -114,6 +115,8 @@ export function SessionControls() {
             </p>
           ) : null}
         </div>
+
+        <SessionDuration />
 
         <div className="flex flex-col gap-3 sm:flex-row">
           <Button

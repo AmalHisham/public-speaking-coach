@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { initialSessionState } from "@/features/session/lib/session-state-machine";
+import { initialSessionTimerState } from "@/features/session/lib/session-timer";
 import { useSessionStore } from "@/stores/session-store";
 
 import {
@@ -51,17 +52,19 @@ function resetSessionStore() {
     ...initialSessionState,
     camera: initialCameraState,
     microphone: initialMicrophoneState,
+    timer: initialSessionTimerState,
   });
 }
 
 function readSessionSnapshot() {
-  const { camera, error, microphone, status } = useSessionStore.getState();
+  const { camera, error, microphone, status, timer } = useSessionStore.getState();
 
   return {
     camera,
     error,
     microphone,
     status,
+    timer,
   };
 }
 
@@ -190,6 +193,7 @@ test("moves the session into failed when camera permission is denied", async () 
       error: "Camera permission denied.",
       microphone: initialMicrophoneState,
       status: "FAILED",
+      timer: initialSessionTimerState,
     });
   } finally {
     Object.defineProperty(globalThis, "navigator", {
@@ -241,6 +245,7 @@ test(
           stream: null,
         },
         status: "FAILED",
+        timer: initialSessionTimerState,
       });
     } finally {
       Object.defineProperty(globalThis, "navigator", {
@@ -258,6 +263,7 @@ test(
     const originalNavigator = globalThis.navigator;
     const { stream: cameraStream } = createMockMediaStream();
     const { stream: microphoneStream } = createMockMediaStream();
+    const originalDateNow = Date.now;
 
     Object.defineProperty(globalThis, "navigator", {
       configurable: true,
@@ -279,22 +285,38 @@ test(
     });
 
     resetSessionStore();
+    Date.now = () => 15_000;
 
     try {
       await useSessionStore.getState().requestStart();
-      assert.deepStrictEqual(readSessionSnapshot(), {
-        camera: {
-          permission: "granted",
-          stream: cameraStream,
+      const snapshot = readSessionSnapshot();
+
+      assert.deepStrictEqual(
+        {
+          camera: snapshot.camera,
+          error: snapshot.error,
+          microphone: snapshot.microphone,
+          status: snapshot.status,
         },
-        error: null,
-        microphone: {
-          permission: "granted",
-          stream: microphoneStream,
+        {
+          camera: {
+            permission: "granted",
+            stream: cameraStream,
+          },
+          error: null,
+          microphone: {
+            permission: "granted",
+            stream: microphoneStream,
+          },
+          status: "ACTIVE",
         },
-        status: "ACTIVE",
+      );
+      assert.deepStrictEqual(snapshot.timer, {
+        elapsedMs: 0,
+        startedAt: 15_000,
       });
     } finally {
+      Date.now = originalDateNow;
       stopWebcamStream(useSessionStore.getState().camera.stream);
       stopMicrophoneStream(useSessionStore.getState().microphone.stream);
       Object.defineProperty(globalThis, "navigator", {
@@ -306,10 +328,11 @@ test(
   },
 );
 
-test("stops retained camera and microphone streams when the session completes", async () => {
+test("stops the timer as soon as the session leaves active", async () => {
   const { stream: cameraStream, tracks: cameraTracks } = createMockMediaStream();
   const { stream: microphoneStream, tracks: microphoneTracks } =
     createMockMediaStream();
+  const originalDateNow = Date.now;
 
   useSessionStore.setState({
     ...useSessionStore.getInitialState(),
@@ -322,9 +345,19 @@ test("stops retained camera and microphone streams when the session completes", 
       stream: microphoneStream,
     },
     status: "ACTIVE",
+    timer: {
+      elapsedMs: 0,
+      startedAt: 10_000,
+    },
   });
 
-  await useSessionStore.getState().requestStop();
+  Date.now = () => 18_250;
+
+  try {
+    await useSessionStore.getState().requestStop();
+  } finally {
+    Date.now = originalDateNow;
+  }
 
   assert.deepStrictEqual(
     cameraTracks.map((track) => track.stopCalled),
@@ -345,6 +378,117 @@ test("stops retained camera and microphone streams when the session completes", 
       stream: null,
     },
     status: "COMPLETED",
+    timer: {
+      elapsedMs: 8_250,
+      startedAt: null,
+    },
+  });
+
+  resetSessionStore();
+});
+
+test("finalizes elapsed time when an active session fails", () => {
+  const originalDateNow = Date.now;
+
+  useSessionStore.setState({
+    ...useSessionStore.getInitialState(),
+    camera: {
+      permission: "granted",
+      stream: null,
+    },
+    microphone: {
+      permission: "granted",
+      stream: null,
+    },
+    status: "ACTIVE",
+    timer: {
+      elapsedMs: 0,
+      startedAt: 4_000,
+    },
+  });
+
+  Date.now = () => 9_600;
+
+  try {
+    useSessionStore.getState().failActive("Speech recognition disconnected.");
+  } finally {
+    Date.now = originalDateNow;
+  }
+
+  assert.deepStrictEqual(readSessionSnapshot(), {
+    camera: {
+      permission: "granted",
+      stream: null,
+    },
+    error: "Speech recognition disconnected.",
+    microphone: {
+      permission: "granted",
+      stream: null,
+    },
+    status: "FAILED",
+    timer: {
+      elapsedMs: 5_600,
+      startedAt: null,
+    },
+  });
+
+  resetSessionStore();
+});
+
+test("stops retained camera and microphone streams when the session completes", async () => {
+  const { stream: cameraStream, tracks: cameraTracks } = createMockMediaStream();
+  const { stream: microphoneStream, tracks: microphoneTracks } =
+    createMockMediaStream();
+  const originalDateNow = Date.now;
+
+  useSessionStore.setState({
+    ...useSessionStore.getInitialState(),
+    camera: {
+      permission: "granted",
+      stream: cameraStream,
+    },
+    microphone: {
+      permission: "granted",
+      stream: microphoneStream,
+    },
+    status: "ACTIVE",
+    timer: {
+      elapsedMs: 0,
+      startedAt: 2_000,
+    },
+  });
+
+  Date.now = () => 7_000;
+
+  try {
+    await useSessionStore.getState().requestStop();
+  } finally {
+    Date.now = originalDateNow;
+  }
+
+  assert.deepStrictEqual(
+    cameraTracks.map((track) => track.stopCalled),
+    [true],
+  );
+  assert.deepStrictEqual(
+    microphoneTracks.map((track) => track.stopCalled),
+    [true],
+  );
+  assert.deepStrictEqual(readSessionSnapshot(), {
+    camera: {
+      permission: "granted",
+      stream: null,
+    },
+    error: null,
+    microphone: {
+      permission: "granted",
+      stream: null,
+    },
+    status: "COMPLETED",
+    timer: {
+      elapsedMs: 5_000,
+      startedAt: null,
+    },
   });
 
   resetSessionStore();
