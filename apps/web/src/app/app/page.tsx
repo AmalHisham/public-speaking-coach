@@ -3,6 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 
 import { BackendSessionStatus } from "@/features/auth/components/backend-session-status";
+import { SessionControls } from "@/features/session/components/session-controls";
 
 export default async function AppPage() {
   const { userId } = await auth();
@@ -34,15 +35,7 @@ export default async function AppPage() {
         </header>
 
         <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)]">
-          <article className="rounded-[2rem] border border-stone-200 bg-white p-8 shadow-sm shadow-stone-200/60">
-            <p className="text-sm font-medium uppercase tracking-[0.25em] text-stone-500">
-              Frontend Session
-            </p>
-            <p className="mt-6 text-sm leading-7 text-stone-700">
-              Your Clerk session is active and this route remains protected by
-              both Next.js auth checks and backend validation.
-            </p>
-          </article>
+          <SessionControls />
 
           <BackendSessionStatus />
         </section>

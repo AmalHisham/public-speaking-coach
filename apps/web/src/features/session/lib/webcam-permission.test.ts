@@ -253,7 +253,7 @@ test(
 );
 
 test(
-  "keeps the session in starting with retained camera and microphone streams",
+  "moves the session into active with retained camera and microphone streams",
   async () => {
     const originalNavigator = globalThis.navigator;
     const { stream: cameraStream } = createMockMediaStream();
@@ -292,7 +292,7 @@ test(
           permission: "granted",
           stream: microphoneStream,
         },
-        status: "STARTING",
+        status: "ACTIVE",
       });
     } finally {
       stopWebcamStream(useSessionStore.getState().camera.stream);
@@ -306,7 +306,7 @@ test(
   },
 );
 
-test("stops retained camera and microphone streams when the session completes", () => {
+test("stops retained camera and microphone streams when the session completes", async () => {
   const { stream: cameraStream, tracks: cameraTracks } = createMockMediaStream();
   const { stream: microphoneStream, tracks: microphoneTracks } =
     createMockMediaStream();
@@ -321,10 +321,10 @@ test("stops retained camera and microphone streams when the session completes", 
       permission: "granted",
       stream: microphoneStream,
     },
-    status: "STOPPING",
+    status: "ACTIVE",
   });
 
-  useSessionStore.getState().completeStop();
+  await useSessionStore.getState().requestStop();
 
   assert.deepStrictEqual(
     cameraTracks.map((track) => track.stopCalled),

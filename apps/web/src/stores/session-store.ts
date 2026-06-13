@@ -26,12 +26,9 @@ type SessionStoreState = SessionMachineState & {
 };
 
 type SessionStore = SessionStoreState & {
-  completeStop: () => void;
   failActive: (error: string) => void;
-  failStart: (error: string) => void;
-  markActive: () => void;
   requestStart: () => Promise<void>;
-  requestStop: () => void;
+  requestStop: () => Promise<void>;
   reset: () => void;
 };
 
@@ -70,26 +67,51 @@ export const useSessionStore = create<SessionStore>((set) => {
       return nextState;
     });
 
+  const completeStart = (microphone: MicrophoneState) => {
+    updateState((state) =>
+      applyLifecycleEvent(state, { type: "START_SUCCESS" }, state.camera, microphone),
+    );
+  };
+
+  const completeStop = () => {
+    updateState((state) =>
+      applyLifecycleEvent(
+        state,
+        { type: "STOP_SUCCESS" },
+        {
+          ...state.camera,
+          stream: null,
+        },
+        {
+          ...state.microphone,
+          stream: null,
+        },
+      ),
+    );
+  };
+
+  const failStart = (
+    error: string,
+    camera?: CameraState,
+    microphone: MicrophoneState = initialMicrophoneState,
+  ) => {
+    updateState((state) =>
+      applyLifecycleEvent(
+        state,
+        { error, type: "START_FAILURE" },
+        camera ?? {
+          ...state.camera,
+          stream: null,
+        },
+        microphone,
+      ),
+    );
+  };
+
   return {
     ...initialSessionState,
     camera: initialCameraState,
     microphone: initialMicrophoneState,
-    completeStop: () => {
-      updateState((state) =>
-        applyLifecycleEvent(
-          state,
-          { type: "STOP_SUCCESS" },
-          {
-            ...state.camera,
-            stream: null,
-          },
-          {
-            ...state.microphone,
-            stream: null,
-          },
-        ),
-      );
-    },
     failActive: (error) => {
       updateState((state) =>
         applyLifecycleEvent(
@@ -105,25 +127,6 @@ export const useSessionStore = create<SessionStore>((set) => {
           },
         ),
       );
-    },
-    failStart: (error) => {
-      updateState((state) =>
-        applyLifecycleEvent(
-          state,
-          { error, type: "START_FAILURE" },
-          {
-            ...state.camera,
-            stream: null,
-          },
-          {
-            ...state.microphone,
-            stream: null,
-          },
-        ),
-      );
-    },
-    markActive: () => {
-      updateState((state) => applyLifecycleEvent(state, { type: "START_SUCCESS" }));
     },
     requestStart: async () => {
       updateState((state) =>
@@ -146,16 +149,13 @@ export const useSessionStore = create<SessionStore>((set) => {
           },
         }));
       } else {
-        updateState((state) =>
-          applyLifecycleEvent(
-            state,
-            { error: cameraResult.error, type: "START_FAILURE" },
-            {
-              permission: cameraResult.permission,
-              stream: null,
-            },
-            initialMicrophoneState,
-          ),
+        failStart(
+          cameraResult.error,
+          {
+            permission: cameraResult.permission,
+            stream: null,
+          },
+          initialMicrophoneState,
         );
 
         return;
@@ -164,34 +164,29 @@ export const useSessionStore = create<SessionStore>((set) => {
       const microphoneResult = await requestMicrophonePermission();
 
       if (microphoneResult.status === "granted") {
-        updateState((state) => ({
-          ...state,
-          microphone: {
-            permission: microphoneResult.permission,
-            stream: microphoneResult.stream,
-          },
-        }));
+        completeStart({
+          permission: microphoneResult.permission,
+          stream: microphoneResult.stream,
+        });
 
         return;
       }
 
-      updateState((state) =>
-        applyLifecycleEvent(
-          state,
-          { error: microphoneResult.error, type: "START_FAILURE" },
-          {
-            ...state.camera,
-            stream: null,
-          },
-          {
-            permission: microphoneResult.permission,
-            stream: null,
-          },
-        ),
+      failStart(
+        microphoneResult.error,
+        undefined,
+        {
+          permission: microphoneResult.permission,
+          stream: null,
+        },
       );
     },
-    requestStop: () => {
+    requestStop: async () => {
       updateState((state) => applyLifecycleEvent(state, { type: "STOP_REQUEST" }));
+
+      await Promise.resolve();
+
+      completeStop();
     },
     reset: () => {
       updateState((state) =>
