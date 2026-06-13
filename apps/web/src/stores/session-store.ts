@@ -7,6 +7,12 @@ import {
   transitionSessionState,
 } from "@/features/session/lib/session-state-machine";
 import {
+  initialMicrophoneState,
+  type MicrophoneState,
+  requestMicrophonePermission,
+  stopMicrophoneStream,
+} from "@/features/session/lib/microphone-permission";
+import {
   initialCameraState,
   type CameraState,
   requestWebcamPermission,
@@ -16,6 +22,7 @@ import type { SessionEvent, SessionMachineState } from "@/types/session";
 
 type SessionStoreState = SessionMachineState & {
   camera: CameraState;
+  microphone: MicrophoneState;
 };
 
 type SessionStore = SessionStoreState & {
@@ -32,10 +39,12 @@ function applyLifecycleEvent(
   state: SessionStoreState,
   event: SessionEvent,
   camera: CameraState = state.camera,
+  microphone: MicrophoneState = state.microphone,
 ): SessionStoreState {
   return {
     ...transitionSessionState(state, event),
     camera,
+    microphone,
   };
 }
 
@@ -51,34 +60,66 @@ export const useSessionStore = create<SessionStore>((set) => {
         stopWebcamStream(state.camera.stream);
       }
 
+      if (
+        state.microphone.stream !== null &&
+        state.microphone.stream !== nextState.microphone.stream
+      ) {
+        stopMicrophoneStream(state.microphone.stream);
+      }
+
       return nextState;
     });
 
   return {
     ...initialSessionState,
     camera: initialCameraState,
+    microphone: initialMicrophoneState,
     completeStop: () => {
       updateState((state) =>
-        applyLifecycleEvent(state, { type: "STOP_SUCCESS" }, {
-          ...state.camera,
-          stream: null,
-        }),
+        applyLifecycleEvent(
+          state,
+          { type: "STOP_SUCCESS" },
+          {
+            ...state.camera,
+            stream: null,
+          },
+          {
+            ...state.microphone,
+            stream: null,
+          },
+        ),
       );
     },
     failActive: (error) => {
       updateState((state) =>
-        applyLifecycleEvent(state, { error, type: "RUNTIME_FAILURE" }, {
-          ...state.camera,
-          stream: null,
-        }),
+        applyLifecycleEvent(
+          state,
+          { error, type: "RUNTIME_FAILURE" },
+          {
+            ...state.camera,
+            stream: null,
+          },
+          {
+            ...state.microphone,
+            stream: null,
+          },
+        ),
       );
     },
     failStart: (error) => {
       updateState((state) =>
-        applyLifecycleEvent(state, { error, type: "START_FAILURE" }, {
-          ...state.camera,
-          stream: null,
-        }),
+        applyLifecycleEvent(
+          state,
+          { error, type: "START_FAILURE" },
+          {
+            ...state.camera,
+            stream: null,
+          },
+          {
+            ...state.microphone,
+            stream: null,
+          },
+        ),
       );
     },
     markActive: () => {
@@ -86,17 +127,48 @@ export const useSessionStore = create<SessionStore>((set) => {
     },
     requestStart: async () => {
       updateState((state) =>
-        applyLifecycleEvent(state, { type: "START_REQUEST" }, initialCameraState),
+        applyLifecycleEvent(
+          state,
+          { type: "START_REQUEST" },
+          initialCameraState,
+          initialMicrophoneState,
+        ),
       );
 
-      const result = await requestWebcamPermission();
+      const cameraResult = await requestWebcamPermission();
 
-      if (result.status === "granted") {
+      if (cameraResult.status === "granted") {
         updateState((state) => ({
           ...state,
           camera: {
-            permission: result.permission,
-            stream: result.stream,
+            permission: cameraResult.permission,
+            stream: cameraResult.stream,
+          },
+        }));
+      } else {
+        updateState((state) =>
+          applyLifecycleEvent(
+            state,
+            { error: cameraResult.error, type: "START_FAILURE" },
+            {
+              permission: cameraResult.permission,
+              stream: null,
+            },
+            initialMicrophoneState,
+          ),
+        );
+
+        return;
+      }
+
+      const microphoneResult = await requestMicrophonePermission();
+
+      if (microphoneResult.status === "granted") {
+        updateState((state) => ({
+          ...state,
+          microphone: {
+            permission: microphoneResult.permission,
+            stream: microphoneResult.stream,
           },
         }));
 
@@ -106,9 +178,13 @@ export const useSessionStore = create<SessionStore>((set) => {
       updateState((state) =>
         applyLifecycleEvent(
           state,
-          { error: result.error, type: "START_FAILURE" },
+          { error: microphoneResult.error, type: "START_FAILURE" },
           {
-            permission: result.permission,
+            ...state.camera,
+            stream: null,
+          },
+          {
+            permission: microphoneResult.permission,
             stream: null,
           },
         ),
@@ -119,7 +195,12 @@ export const useSessionStore = create<SessionStore>((set) => {
     },
     reset: () => {
       updateState((state) =>
-        applyLifecycleEvent(state, { type: "RESET" }, initialCameraState),
+        applyLifecycleEvent(
+          state,
+          { type: "RESET" },
+          initialCameraState,
+          initialMicrophoneState,
+        ),
       );
     },
   };
