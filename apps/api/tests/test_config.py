@@ -69,6 +69,38 @@ def test_settings_reads_csv_auth_configuration_from_environment(
     )
 
 
+def test_settings_reads_openai_api_key_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("DATABASE_HOST", "localhost")
+    monkeypatch.setenv("DATABASE_PORT", "5432")
+    monkeypatch.setenv("DATABASE_NAME", "public_speaking_coach")
+    monkeypatch.setenv("DATABASE_USER", "postgres")
+    monkeypatch.setenv("DATABASE_PASSWORD", "postgres")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-value")
+    monkeypatch.setenv("TRANSCRIPTION_MAX_UPLOAD_BYTES", "1048576")
+
+    settings = Settings()
+
+    assert settings.openai_api_key is not None
+    assert settings.openai_api_key.get_secret_value() == "sk-test-value"
+    assert settings.transcription_max_upload_bytes == 1_048_576
+
+
+def test_settings_accepts_openai_api_key_in_direct_configuration() -> None:
+    settings = Settings(
+        database_host="localhost",
+        database_port=5432,
+        database_name="public_speaking_coach",
+        database_user="postgres",
+        database_password="postgres",
+        openai_api_key="sk-configured",
+        transcription_max_upload_bytes=2_048,
+    )
+
+    assert settings.openai_api_key is not None
+    assert settings.openai_api_key.get_secret_value() == "sk-configured"
+    assert settings.transcription_max_upload_bytes == 2_048
+
+
 def test_settings_env_file_is_resolved_from_app_directory() -> None:
     assert ENV_FILE.is_absolute()
     assert ENV_FILE == Path(__file__).resolve().parents[1] / ".env"

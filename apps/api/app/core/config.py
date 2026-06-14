@@ -16,8 +16,10 @@ class Settings(BaseSettings):
     database_name: str
     database_user: str
     database_password: SecretStr
+    transcription_max_upload_bytes: int = 25 * 1024 * 1024
     database_query: dict[str, str] = Field(default_factory=dict)
     clerk_secret_key: SecretStr | None = None
+    openai_api_key: SecretStr | None = None
     clerk_authorized_parties: Annotated[tuple[str, ...], NoDecode] = ()
     cors_allowed_origins: Annotated[tuple[str, ...], NoDecode] = ()
 
