@@ -24,11 +24,29 @@ import {
   requestWebcamPermission,
   stopWebcamStream,
 } from "@/features/session/lib/webcam-permission";
+import {
+  initialTranscriptState,
+  type TranscriptState,
+} from "@/features/speech/lib/speech-recognition";
+import {
+  initialSpeechRecordingState,
+  startMediaRecording,
+  type MediaRecordingController,
+  type SpeechRecordingState,
+} from "@/features/speech/lib/media-recorder";
 import type { SessionEvent, SessionMachineState } from "@/types/session";
+
+type SpeechState = TranscriptState & SpeechRecordingState;
+
+const initialSpeechState: SpeechState = {
+  ...initialTranscriptState,
+  ...initialSpeechRecordingState,
+};
 
 type SessionStoreState = SessionMachineState & {
   camera: CameraState;
   microphone: MicrophoneState;
+  speech: SpeechState;
   timer: SessionTimerState;
 };
 
@@ -44,17 +62,61 @@ function applyLifecycleEvent(
   event: SessionEvent,
   camera: CameraState = state.camera,
   microphone: MicrophoneState = state.microphone,
+  speech: SpeechState = state.speech,
   timer: SessionTimerState = state.timer,
 ): SessionStoreState {
   return {
     ...transitionSessionState(state, event),
     camera,
     microphone,
+    speech,
     timer,
   };
 }
 
 export const useSessionStore = create<SessionStore>((set) => {
+  let mediaRecordingController: MediaRecordingController | null = null;
+  let activeMediaRecordingToken = 0;
+
+  const createMediaRecordingToken = () => {
+    activeMediaRecordingToken += 1;
+
+    return activeMediaRecordingToken;
+  };
+
+  const invalidateMediaRecordingToken = () => {
+    activeMediaRecordingToken += 1;
+  };
+
+  const stopMediaRecording = async (
+    options: {
+      invalidate?: boolean;
+    } = {},
+  ) => {
+    const { invalidate = false } = options;
+
+    if (mediaRecordingController === null) {
+      if (invalidate) {
+        invalidateMediaRecordingToken();
+      }
+
+      return;
+    }
+
+    const controller = mediaRecordingController;
+    mediaRecordingController = null;
+
+    if (invalidate) {
+      invalidateMediaRecordingToken();
+    }
+
+    await controller.stop();
+
+    if (!invalidate) {
+      invalidateMediaRecordingToken();
+    }
+  };
+
   const updateState = (updater: (state: SessionStoreState) => SessionStoreState) =>
     set((state) => {
       const nextState = updater(state);
@@ -83,6 +145,7 @@ export const useSessionStore = create<SessionStore>((set) => {
         { type: "START_SUCCESS" },
         state.camera,
         microphone,
+        initialSpeechState,
         startSessionTimer(),
       ),
     );
@@ -101,6 +164,7 @@ export const useSessionStore = create<SessionStore>((set) => {
           ...state.microphone,
           stream: null,
         },
+        state.speech,
         state.timer,
       ),
     );
@@ -120,40 +184,137 @@ export const useSessionStore = create<SessionStore>((set) => {
           stream: null,
         },
         microphone,
+        initialSpeechState,
         initialSessionTimerState,
       ),
     );
+  };
+
+  const failActiveSession = (error: string) => {
+    void stopMediaRecording({
+      invalidate: true,
+    });
+
+    updateState((state) =>
+      applyLifecycleEvent(
+        state,
+        { error, type: "RUNTIME_FAILURE" },
+        {
+          ...state.camera,
+          stream: null,
+        },
+        {
+          ...state.microphone,
+          stream: null,
+        },
+        {
+          ...state.speech,
+          recordingError:
+            state.speech.recordingStatus === "recording"
+              ? "Audio recording stopped before completion."
+              : state.speech.recordingError,
+          recordingStatus:
+            state.speech.recordingStatus === "recording"
+              ? "failed"
+              : state.speech.recordingStatus,
+        },
+        stopSessionTimer(state.timer),
+      ),
+    );
+  };
+
+  const startActiveMediaRecording = (stream: MediaStream) => {
+    const mediaRecordingToken = createMediaRecordingToken();
+    const isCurrentMediaRecording = () =>
+      activeMediaRecordingToken === mediaRecordingToken;
+
+    const mediaRecordingResult = startMediaRecording({
+      onError: (error) => {
+        if (!isCurrentMediaRecording()) {
+          return;
+        }
+
+        updateState((state) => ({
+          ...state,
+          speech: {
+            ...state.speech,
+            recordingError: error,
+            recordingStatus: "failed",
+          },
+        }));
+      },
+      onRecordingComplete: ({ audioBlob, mimeType }) => {
+        if (!isCurrentMediaRecording()) {
+          return;
+        }
+
+        updateState((state) => ({
+          ...state,
+          speech: {
+            ...state.speech,
+            audioBlob,
+            recordingError: null,
+            recordingMimeType: mimeType,
+            recordingStatus: "recorded",
+          },
+        }));
+      },
+      onRecordingStart: ({ mimeType }) => {
+        if (!isCurrentMediaRecording()) {
+          return;
+        }
+
+        updateState((state) => ({
+          ...state,
+          speech: {
+            ...state.speech,
+            audioBlob: null,
+            recordingError: null,
+            recordingMimeType: mimeType,
+            recordingStatus: "recording",
+          },
+        }));
+      },
+      stream,
+    });
+
+    if (mediaRecordingResult.status === "failed") {
+      updateState((state) => ({
+        ...state,
+        speech: {
+          ...state.speech,
+          audioBlob: null,
+          recordingError: mediaRecordingResult.error,
+          recordingMimeType: null,
+          recordingStatus: "failed",
+        },
+      }));
+
+      return;
+    }
+
+    mediaRecordingController = mediaRecordingResult.controller;
   };
 
   return {
     ...initialSessionState,
     camera: initialCameraState,
     microphone: initialMicrophoneState,
+    speech: initialSpeechState,
     timer: initialSessionTimerState,
-    failActive: (error) => {
-      updateState((state) =>
-        applyLifecycleEvent(
-          state,
-          { error, type: "RUNTIME_FAILURE" },
-          {
-            ...state.camera,
-            stream: null,
-          },
-          {
-            ...state.microphone,
-            stream: null,
-          },
-          stopSessionTimer(state.timer),
-        ),
-      );
-    },
+    failActive: failActiveSession,
     requestStart: async () => {
+      await stopMediaRecording({
+        invalidate: true,
+      });
+
       updateState((state) =>
         applyLifecycleEvent(
           state,
           { type: "START_REQUEST" },
           initialCameraState,
           initialMicrophoneState,
+          initialSpeechState,
           initialSessionTimerState,
         ),
       );
@@ -188,6 +349,7 @@ export const useSessionStore = create<SessionStore>((set) => {
           permission: microphoneResult.permission,
           stream: microphoneResult.stream,
         });
+        startActiveMediaRecording(microphoneResult.stream);
 
         return;
       }
@@ -208,21 +370,27 @@ export const useSessionStore = create<SessionStore>((set) => {
           { type: "STOP_REQUEST" },
           state.camera,
           state.microphone,
+          state.speech,
           stopSessionTimer(state.timer),
         ),
       );
 
-      await Promise.resolve();
+      await stopMediaRecording();
 
       completeStop();
     },
     reset: () => {
+      void stopMediaRecording({
+        invalidate: true,
+      });
+
       updateState((state) =>
         applyLifecycleEvent(
           state,
           { type: "RESET" },
           initialCameraState,
           initialMicrophoneState,
+          initialSpeechState,
           initialSessionTimerState,
         ),
       );
