@@ -4,7 +4,6 @@ import test from "node:test";
 import { initialSessionState } from "@/features/session/lib/session-state-machine";
 import { initialSessionTimerState } from "@/features/session/lib/session-timer";
 import { initialSpeechRecordingState } from "@/features/speech/lib/media-recorder";
-import { initialTranscriptState } from "@/features/speech/lib/speech-recognition";
 import { useSessionStore } from "@/stores/session-store";
 
 import {
@@ -45,9 +44,45 @@ function createMockMediaStream(trackCount = 1): {
 
 function createInitialSpeechState() {
   return {
-    ...initialTranscriptState,
     ...initialSpeechRecordingState,
+    processingError: null,
+    processingStatus: "idle" as const,
+    transcript: null,
   };
+}
+
+function createTranscriptionPayload() {
+  return {
+    duration_seconds: 8.2,
+    language: "en",
+    model: "whisper-1",
+    segments: [
+      {
+        end: 1.5,
+        id: 0,
+        start: 0,
+        text: "steady pacing",
+      },
+    ],
+    text: "steady pacing",
+    words: [
+      {
+        end: 0.6,
+        start: 0,
+        word: "steady",
+      },
+      {
+        end: 1.2,
+        start: 0.7,
+        word: "pacing",
+      },
+    ],
+  };
+}
+
+async function flushAsyncUpdates() {
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 function createPermissionDeniedError() {
@@ -55,6 +90,47 @@ function createPermissionDeniedError() {
   error.name = "NotAllowedError";
 
   return error;
+}
+
+function createAbortError() {
+  const error = new Error("The operation was aborted.");
+  error.name = "AbortError";
+
+  return error;
+}
+
+function createAbortableTranscriptionRequest() {
+  let abortCount = 0;
+  let callCount = 0;
+
+  return {
+    request: ({
+      onProcessingStatusChange,
+      signal,
+    }: {
+      onProcessingStatusChange: (status: "transcribing" | "uploading") => void;
+      signal: AbortSignal;
+    }) => {
+      callCount += 1;
+      onProcessingStatusChange("uploading");
+      onProcessingStatusChange("transcribing");
+
+      return new Promise<ReturnType<typeof createTranscriptionPayload>>(
+        (_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              abortCount += 1;
+              reject(createAbortError());
+            },
+            { once: true },
+          );
+        },
+      );
+    },
+    readAbortCount: () => abortCount,
+    readCallCount: () => callCount,
+  };
 }
 
 class MockMediaRecorder {
@@ -150,6 +226,8 @@ function installMockMediaRecorder() {
 }
 
 function resetSessionStore() {
+  useSessionStore.getState().setSpeechTranscriptionRequester(null);
+
   if (useSessionStore.getState().status === "ACTIVE") {
     useSessionStore.getState().failActive("Resetting the session store.");
   }
@@ -426,7 +504,7 @@ test(
             stream: microphoneStream,
           },
           speech: {
-            ...initialTranscriptState,
+            ...createInitialSpeechState(),
             audioBlob: null,
             recordingError: null,
             recordingMimeType: "audio/webm;codecs=opus",
@@ -509,6 +587,603 @@ test("stops recording on stop request and retains the recorded Blob", async () =
   } finally {
     stopWebcamStream(useSessionStore.getState().camera.stream);
     stopMicrophoneStream(useSessionStore.getState().microphone.stream);
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: originalNavigator,
+    });
+    restoreWindow();
+    resetSessionStore();
+  }
+});
+
+test("uploads completed audio and stores the returned transcript payload", async () => {
+  const originalNavigator = globalThis.navigator;
+  const restoreWindow = installMockMediaRecorder();
+  const { stream: cameraStream } = createMockMediaStream();
+  const { stream: microphoneStream } = createMockMediaStream();
+  let uploadedAudioText: string | null = null;
+  let uploadedMimeType: string | null = null;
+
+  MockMediaRecorder.deferStop = true;
+  MockMediaRecorder.supportedMimeTypes = new Set(["audio/webm"]);
+
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        getUserMedia: async (constraints: MediaStreamConstraints) => {
+          if (constraints.video === true && constraints.audio === false) {
+            return cameraStream;
+          }
+
+          if (constraints.audio === true && constraints.video === false) {
+            return microphoneStream;
+          }
+
+          throw new Error("Unexpected media constraints.");
+        },
+      },
+    },
+  });
+
+  resetSessionStore();
+  useSessionStore.getState().setSpeechTranscriptionRequester(
+    async ({ audioBlob, onProcessingStatusChange, recordingMimeType }) => {
+      uploadedAudioText = await audioBlob.text();
+      uploadedMimeType = recordingMimeType;
+      onProcessingStatusChange("uploading");
+      onProcessingStatusChange("transcribing");
+
+      return createTranscriptionPayload();
+    },
+  );
+
+  try {
+    await useSessionStore.getState().requestStart();
+
+    const mediaRecorder = MockMediaRecorder.lastInstance;
+    assert.ok(mediaRecorder instanceof MockMediaRecorder);
+
+    mediaRecorder.emitData(new Blob(["steady pacing"], { type: "audio/webm" }));
+
+    const stopPromise = useSessionStore.getState().requestStop();
+
+    mediaRecorder.emitStop();
+    await stopPromise;
+    await flushAsyncUpdates();
+
+    const speech = useSessionStore.getState().speech;
+
+    assert.equal(useSessionStore.getState().status, "COMPLETED");
+    assert.equal(uploadedAudioText, "steady pacing");
+    assert.equal(uploadedMimeType, "audio/webm");
+    assert.equal(speech.processingStatus, "transcript_ready");
+    assert.equal(speech.processingError, null);
+    assert.deepStrictEqual(speech.transcript, createTranscriptionPayload());
+    assert.equal(speech.transcript?.text, "steady pacing");
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: originalNavigator,
+    });
+    restoreWindow();
+    resetSessionStore();
+  }
+});
+
+test("stores a failed processing state when audio upload fails", async () => {
+  const originalNavigator = globalThis.navigator;
+  const restoreWindow = installMockMediaRecorder();
+  const { stream: cameraStream } = createMockMediaStream();
+  const { stream: microphoneStream } = createMockMediaStream();
+
+  MockMediaRecorder.deferStop = true;
+  MockMediaRecorder.supportedMimeTypes = new Set(["audio/webm"]);
+
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        getUserMedia: async (constraints: MediaStreamConstraints) => {
+          if (constraints.video === true && constraints.audio === false) {
+            return cameraStream;
+          }
+
+          if (constraints.audio === true && constraints.video === false) {
+            return microphoneStream;
+          }
+
+          throw new Error("Unexpected media constraints.");
+        },
+      },
+    },
+  });
+
+  resetSessionStore();
+  useSessionStore.getState().setSpeechTranscriptionRequester(
+    async ({ onProcessingStatusChange }) => {
+      onProcessingStatusChange("uploading");
+
+      throw new Error("Audio upload failed.");
+    },
+  );
+
+  try {
+    await useSessionStore.getState().requestStart();
+
+    const mediaRecorder = MockMediaRecorder.lastInstance;
+    assert.ok(mediaRecorder instanceof MockMediaRecorder);
+
+    mediaRecorder.emitData(new Blob(["steady pacing"], { type: "audio/webm" }));
+
+    const stopPromise = useSessionStore.getState().requestStop();
+
+    mediaRecorder.emitStop();
+    await stopPromise;
+    await flushAsyncUpdates();
+
+    assert.deepStrictEqual(
+      {
+        processingError: useSessionStore.getState().speech.processingError,
+        processingStatus: useSessionStore.getState().speech.processingStatus,
+        transcript: useSessionStore.getState().speech.transcript,
+      },
+      {
+        processingError: "Audio upload failed.",
+        processingStatus: "failed",
+        transcript: null,
+      },
+    );
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: originalNavigator,
+    });
+    restoreWindow();
+    resetSessionStore();
+  }
+});
+
+test("stores a failed processing state when transcription fails", async () => {
+  const originalNavigator = globalThis.navigator;
+  const restoreWindow = installMockMediaRecorder();
+  const { stream: cameraStream } = createMockMediaStream();
+  const { stream: microphoneStream } = createMockMediaStream();
+
+  MockMediaRecorder.deferStop = true;
+  MockMediaRecorder.supportedMimeTypes = new Set(["audio/webm"]);
+
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        getUserMedia: async (constraints: MediaStreamConstraints) => {
+          if (constraints.video === true && constraints.audio === false) {
+            return cameraStream;
+          }
+
+          if (constraints.audio === true && constraints.video === false) {
+            return microphoneStream;
+          }
+
+          throw new Error("Unexpected media constraints.");
+        },
+      },
+    },
+  });
+
+  resetSessionStore();
+  useSessionStore.getState().setSpeechTranscriptionRequester(
+    async ({ onProcessingStatusChange }) => {
+      onProcessingStatusChange("uploading");
+      onProcessingStatusChange("transcribing");
+
+      throw new Error("OpenAI transcription failed.");
+    },
+  );
+
+  try {
+    await useSessionStore.getState().requestStart();
+
+    const mediaRecorder = MockMediaRecorder.lastInstance;
+    assert.ok(mediaRecorder instanceof MockMediaRecorder);
+
+    mediaRecorder.emitData(new Blob(["steady pacing"], { type: "audio/webm" }));
+
+    const stopPromise = useSessionStore.getState().requestStop();
+
+    mediaRecorder.emitStop();
+    await stopPromise;
+    await flushAsyncUpdates();
+
+    assert.deepStrictEqual(
+      {
+        processingError: useSessionStore.getState().speech.processingError,
+        processingStatus: useSessionStore.getState().speech.processingStatus,
+        transcript: useSessionStore.getState().speech.transcript,
+      },
+      {
+        processingError: "OpenAI transcription failed.",
+        processingStatus: "failed",
+        transcript: null,
+      },
+    );
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: originalNavigator,
+    });
+    restoreWindow();
+    resetSessionStore();
+  }
+});
+
+test("does not start duplicate transcription requests while one is already in flight", async () => {
+  const originalNavigator = globalThis.navigator;
+  const restoreWindow = installMockMediaRecorder();
+  const { stream: cameraStream } = createMockMediaStream();
+  const { stream: microphoneStream } = createMockMediaStream();
+  let transcriptionRequestCount = 0;
+  let releaseTranscription: () => void = () => {
+    throw new Error("Expected the in-flight transcription promise to exist.");
+  };
+
+  MockMediaRecorder.deferStop = true;
+  MockMediaRecorder.supportedMimeTypes = new Set(["audio/webm"]);
+
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        getUserMedia: async (constraints: MediaStreamConstraints) => {
+          if (constraints.video === true && constraints.audio === false) {
+            return cameraStream;
+          }
+
+          if (constraints.audio === true && constraints.video === false) {
+            return microphoneStream;
+          }
+
+          throw new Error("Unexpected media constraints.");
+        },
+      },
+    },
+  });
+
+  resetSessionStore();
+  useSessionStore.getState().setSpeechTranscriptionRequester(
+    ({ onProcessingStatusChange }) => {
+      transcriptionRequestCount += 1;
+      onProcessingStatusChange("uploading");
+      onProcessingStatusChange("transcribing");
+
+      return new Promise<ReturnType<typeof createTranscriptionPayload>>(
+        (resolve) => {
+          releaseTranscription = () => {
+            resolve(createTranscriptionPayload());
+          };
+        },
+      );
+    },
+  );
+
+  try {
+    await useSessionStore.getState().requestStart();
+
+    const mediaRecorder = MockMediaRecorder.lastInstance;
+    assert.ok(mediaRecorder instanceof MockMediaRecorder);
+
+    mediaRecorder.emitData(new Blob(["steady pacing"], { type: "audio/webm" }));
+
+    const stopPromise = useSessionStore.getState().requestStop();
+
+    mediaRecorder.emitStop();
+    await stopPromise;
+    await flushAsyncUpdates();
+
+    assert.equal(useSessionStore.getState().speech.processingStatus, "transcribing");
+    assert.equal(transcriptionRequestCount, 1);
+
+    await useSessionStore.getState().processCompletedSpeech();
+
+    assert.equal(transcriptionRequestCount, 1);
+
+    releaseTranscription();
+    await flushAsyncUpdates();
+
+    assert.equal(useSessionStore.getState().speech.processingStatus, "transcript_ready");
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: originalNavigator,
+    });
+    restoreWindow();
+    resetSessionStore();
+  }
+});
+
+test("aborts in-flight transcription when the session resets", async () => {
+  const originalNavigator = globalThis.navigator;
+  const restoreWindow = installMockMediaRecorder();
+  const { stream: cameraStream } = createMockMediaStream();
+  const { stream: microphoneStream } = createMockMediaStream();
+  const abortableTranscription = createAbortableTranscriptionRequest();
+
+  MockMediaRecorder.deferStop = true;
+  MockMediaRecorder.supportedMimeTypes = new Set(["audio/webm"]);
+
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        getUserMedia: async (constraints: MediaStreamConstraints) => {
+          if (constraints.video === true && constraints.audio === false) {
+            return cameraStream;
+          }
+
+          if (constraints.audio === true && constraints.video === false) {
+            return microphoneStream;
+          }
+
+          throw new Error("Unexpected media constraints.");
+        },
+      },
+    },
+  });
+
+  resetSessionStore();
+  useSessionStore
+    .getState()
+    .setSpeechTranscriptionRequester(abortableTranscription.request);
+
+  try {
+    await useSessionStore.getState().requestStart();
+
+    const mediaRecorder = MockMediaRecorder.lastInstance;
+    assert.ok(mediaRecorder instanceof MockMediaRecorder);
+
+    mediaRecorder.emitData(new Blob(["steady pacing"], { type: "audio/webm" }));
+
+    const stopPromise = useSessionStore.getState().requestStop();
+
+    mediaRecorder.emitStop();
+    await stopPromise;
+    await flushAsyncUpdates();
+
+    assert.equal(useSessionStore.getState().speech.processingStatus, "transcribing");
+    assert.equal(abortableTranscription.readAbortCount(), 0);
+
+    useSessionStore.getState().reset();
+    await flushAsyncUpdates();
+
+    assert.equal(abortableTranscription.readAbortCount(), 1);
+    assert.deepStrictEqual(readSessionSnapshot(), {
+      camera: initialCameraState,
+      error: null,
+      microphone: initialMicrophoneState,
+      speech: createInitialSpeechState(),
+      status: "IDLE",
+      timer: initialSessionTimerState,
+    });
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: originalNavigator,
+    });
+    restoreWindow();
+    resetSessionStore();
+  }
+});
+
+test("aborts in-flight transcription when the requester is removed", async () => {
+  const originalNavigator = globalThis.navigator;
+  const restoreWindow = installMockMediaRecorder();
+  const { stream: cameraStream } = createMockMediaStream();
+  const { stream: microphoneStream } = createMockMediaStream();
+  const abortableTranscription = createAbortableTranscriptionRequest();
+
+  MockMediaRecorder.deferStop = true;
+  MockMediaRecorder.supportedMimeTypes = new Set(["audio/webm"]);
+
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        getUserMedia: async (constraints: MediaStreamConstraints) => {
+          if (constraints.video === true && constraints.audio === false) {
+            return cameraStream;
+          }
+
+          if (constraints.audio === true && constraints.video === false) {
+            return microphoneStream;
+          }
+
+          throw new Error("Unexpected media constraints.");
+        },
+      },
+    },
+  });
+
+  resetSessionStore();
+  useSessionStore
+    .getState()
+    .setSpeechTranscriptionRequester(abortableTranscription.request);
+
+  try {
+    await useSessionStore.getState().requestStart();
+
+    const mediaRecorder = MockMediaRecorder.lastInstance;
+    assert.ok(mediaRecorder instanceof MockMediaRecorder);
+
+    mediaRecorder.emitData(new Blob(["steady pacing"], { type: "audio/webm" }));
+
+    const stopPromise = useSessionStore.getState().requestStop();
+
+    mediaRecorder.emitStop();
+    await stopPromise;
+    await flushAsyncUpdates();
+
+    useSessionStore.getState().setSpeechTranscriptionRequester(null);
+    await flushAsyncUpdates();
+
+    assert.equal(abortableTranscription.readAbortCount(), 1);
+    assert.equal(useSessionStore.getState().speech.processingStatus, "idle");
+    assert.equal(useSessionStore.getState().speech.transcript, null);
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: originalNavigator,
+    });
+    restoreWindow();
+    resetSessionStore();
+  }
+});
+
+test("aborts the previous transcription when a new requester replaces it", async () => {
+  const originalNavigator = globalThis.navigator;
+  const restoreWindow = installMockMediaRecorder();
+  const { stream: cameraStream } = createMockMediaStream();
+  const { stream: microphoneStream } = createMockMediaStream();
+  const firstRequester = createAbortableTranscriptionRequest();
+  let replacementRequestCount = 0;
+
+  MockMediaRecorder.deferStop = true;
+  MockMediaRecorder.supportedMimeTypes = new Set(["audio/webm"]);
+
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        getUserMedia: async (constraints: MediaStreamConstraints) => {
+          if (constraints.video === true && constraints.audio === false) {
+            return cameraStream;
+          }
+
+          if (constraints.audio === true && constraints.video === false) {
+            return microphoneStream;
+          }
+
+          throw new Error("Unexpected media constraints.");
+        },
+      },
+    },
+  });
+
+  resetSessionStore();
+  useSessionStore.getState().setSpeechTranscriptionRequester(firstRequester.request);
+
+  try {
+    await useSessionStore.getState().requestStart();
+
+    const mediaRecorder = MockMediaRecorder.lastInstance;
+    assert.ok(mediaRecorder instanceof MockMediaRecorder);
+
+    mediaRecorder.emitData(new Blob(["steady pacing"], { type: "audio/webm" }));
+
+    const stopPromise = useSessionStore.getState().requestStop();
+
+    mediaRecorder.emitStop();
+    await stopPromise;
+    await flushAsyncUpdates();
+
+    useSessionStore.getState().setSpeechTranscriptionRequester(
+      async ({ onProcessingStatusChange }) => {
+        replacementRequestCount += 1;
+        onProcessingStatusChange("uploading");
+        onProcessingStatusChange("transcribing");
+
+        return createTranscriptionPayload();
+      },
+    );
+    await flushAsyncUpdates();
+
+    assert.equal(firstRequester.readAbortCount(), 1);
+    assert.equal(replacementRequestCount, 1);
+    assert.equal(useSessionStore.getState().speech.processingStatus, "transcript_ready");
+    assert.equal(
+      useSessionStore.getState().speech.transcript?.text,
+      "steady pacing",
+    );
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: originalNavigator,
+    });
+    restoreWindow();
+    resetSessionStore();
+  }
+});
+
+test("allows retry after a transcription failure", async () => {
+  const originalNavigator = globalThis.navigator;
+  const restoreWindow = installMockMediaRecorder();
+  const { stream: cameraStream } = createMockMediaStream();
+  const { stream: microphoneStream } = createMockMediaStream();
+  let transcriptionAttemptCount = 0;
+
+  MockMediaRecorder.deferStop = true;
+  MockMediaRecorder.supportedMimeTypes = new Set(["audio/webm"]);
+
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        getUserMedia: async (constraints: MediaStreamConstraints) => {
+          if (constraints.video === true && constraints.audio === false) {
+            return cameraStream;
+          }
+
+          if (constraints.audio === true && constraints.video === false) {
+            return microphoneStream;
+          }
+
+          throw new Error("Unexpected media constraints.");
+        },
+      },
+    },
+  });
+
+  resetSessionStore();
+  useSessionStore.getState().setSpeechTranscriptionRequester(
+    async ({ onProcessingStatusChange }) => {
+      transcriptionAttemptCount += 1;
+      onProcessingStatusChange("uploading");
+      onProcessingStatusChange("transcribing");
+
+      if (transcriptionAttemptCount === 1) {
+        throw new Error("OpenAI transcription failed.");
+      }
+
+      return createTranscriptionPayload();
+    },
+  );
+
+  try {
+    await useSessionStore.getState().requestStart();
+
+    const mediaRecorder = MockMediaRecorder.lastInstance;
+    assert.ok(mediaRecorder instanceof MockMediaRecorder);
+
+    mediaRecorder.emitData(new Blob(["steady pacing"], { type: "audio/webm" }));
+
+    const stopPromise = useSessionStore.getState().requestStop();
+
+    mediaRecorder.emitStop();
+    await stopPromise;
+    await flushAsyncUpdates();
+
+    assert.equal(useSessionStore.getState().speech.processingStatus, "failed");
+    assert.equal(transcriptionAttemptCount, 1);
+
+    await useSessionStore.getState().processCompletedSpeech();
+
+    assert.equal(transcriptionAttemptCount, 2);
+    assert.equal(useSessionStore.getState().speech.processingStatus, "transcript_ready");
+    assert.equal(
+      useSessionStore.getState().speech.transcript?.text,
+      "steady pacing",
+    );
+  } finally {
     Object.defineProperty(globalThis, "navigator", {
       configurable: true,
       value: originalNavigator,
@@ -637,7 +1312,7 @@ test("keeps failed session state intact when an old recorder completes later", a
       {
         error: "Recording infrastructure disconnected.",
         speech: {
-          ...initialTranscriptState,
+          ...createInitialSpeechState(),
           audioBlob: null,
           recordingError: "Audio recording stopped before completion.",
           recordingMimeType: "audio/webm",
@@ -658,7 +1333,7 @@ test("keeps failed session state intact when an old recorder completes later", a
       {
         error: "Recording infrastructure disconnected.",
         speech: {
-          ...initialTranscriptState,
+          ...createInitialSpeechState(),
           audioBlob: null,
           recordingError: "Audio recording stopped before completion.",
           recordingMimeType: "audio/webm",
@@ -814,7 +1489,7 @@ test("ignores stale recorder completion after a replacement recorder becomes act
       },
       {
         speech: {
-          ...initialTranscriptState,
+          ...createInitialSpeechState(),
           audioBlob: null,
           recordingError: null,
           recordingMimeType: "audio/webm",
@@ -885,7 +1560,7 @@ test("marks the speech slice as failed when MediaRecorder is unavailable", async
       {
         error: null,
         speech: {
-          ...initialTranscriptState,
+          ...createInitialSpeechState(),
           audioBlob: null,
           recordingError: "Audio recording is unavailable in this browser.",
           recordingMimeType: null,
@@ -955,7 +1630,7 @@ test("handles runtime recorder errors without failing the session lifecycle", as
       {
         error: null,
         speech: {
-          ...initialTranscriptState,
+          ...createInitialSpeechState(),
           audioBlob: null,
           recordingError: "Recorder disconnected.",
           recordingMimeType: null,

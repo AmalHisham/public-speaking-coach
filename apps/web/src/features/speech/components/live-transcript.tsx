@@ -1,65 +1,128 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import { useSessionStore } from "@/stores/session-store";
 
-function getRecordingDescription(
+function getSpeechDescription(
+  processingStatus:
+    | "failed"
+    | "idle"
+    | "transcribing"
+    | "transcript_ready"
+    | "uploading",
   recordingStatus: "failed" | "idle" | "recorded" | "recording",
   hasAudioBlob: boolean,
 ): string {
   if (recordingStatus === "failed") {
-    return "Audio recording could not be initialized for this session.";
+    return "Browser recording did not complete, so no transcription request can be sent.";
   }
 
   if (recordingStatus === "recording") {
     return "Browser audio recording is active while the session is running.";
   }
 
-  if (recordingStatus === "recorded" && hasAudioBlob) {
-    return "Recorded audio is stored locally in session state for later phases.";
+  if (!hasAudioBlob) {
+    return "Audio capture will begin after camera and microphone access succeed.";
   }
 
-  return "Audio recording will start after camera and microphone access succeed.";
+  switch (processingStatus) {
+    case "uploading":
+      return "Recording complete. Uploading audio to the backend transcription service.";
+    case "transcribing":
+      return "Audio upload finished and Whisper transcription is running on the backend.";
+    case "transcript_ready":
+      return "Transcription data is ready for later speech-analysis phases.";
+    case "failed":
+      return "Recording completed, but transcription did not finish successfully.";
+    case "idle":
+      return "Recording complete. Preparing the transcription request.";
+  }
 }
 
 export function LiveTranscript() {
-  const audioBlob = useSessionStore((state) => state.speech.audioBlob);
-  const recordingError = useSessionStore((state) => state.speech.recordingError);
-  const recordingMimeType = useSessionStore(
-    (state) => state.speech.recordingMimeType,
+  const processCompletedSpeech = useSessionStore(
+    (state) => state.processCompletedSpeech,
   );
-  const recordingStatus = useSessionStore(
-    (state) => state.speech.recordingStatus,
-  );
-  const hasAudioBlob = audioBlob !== null;
+  const sessionStatus = useSessionStore((state) => state.status);
+  const speech = useSessionStore((state) => state.speech);
+  const hasAudioBlob = speech.audioBlob !== null;
+  const canRetryTranscription =
+    sessionStatus === "COMPLETED" &&
+    speech.audioBlob !== null &&
+    speech.processingStatus === "failed" &&
+    speech.recordingStatus === "recorded";
+  const hasTranscript = speech.transcript !== null;
 
   return (
     <article className="rounded-[2rem] border border-stone-200 bg-white p-8 shadow-sm shadow-stone-200/60">
       <div className="space-y-6">
         <div className="space-y-3">
           <p className="text-sm font-medium uppercase tracking-[0.25em] text-stone-500">
-            Speech Recording
+            Speech Processing
           </p>
           <h2 className="text-2xl font-semibold tracking-tight text-stone-950">
-            Browser audio capture
+            Recording and transcription
           </h2>
           <p className="max-w-2xl text-sm leading-7 text-stone-700">
-            {getRecordingDescription(recordingStatus, hasAudioBlob)}
+            {getSpeechDescription(
+              speech.processingStatus,
+              speech.recordingStatus,
+              hasAudioBlob,
+            )}
           </p>
         </div>
 
         <div className="rounded-[1.5rem] border border-stone-200 bg-stone-50 p-5">
           <p className="text-xs font-semibold uppercase tracking-[0.25em] text-stone-500">
-            Recording State
+            Speech State
           </p>
           <div className="mt-4 min-h-32 rounded-[1.25rem] border border-dashed border-stone-300 bg-white px-4 py-4 text-sm leading-7 text-stone-700">
-            <p>Status: {recordingStatus}</p>
+            <p>Recording status: {speech.recordingStatus}</p>
+            <p>Processing status: {speech.processingStatus}</p>
             <p>Audio retained: {hasAudioBlob ? "yes" : "no"}</p>
-            <p>MIME type: {recordingMimeType ?? "unavailable"}</p>
-            <p>Blob size: {audioBlob?.size ?? 0} bytes</p>
-            {recordingError ? (
-              <p className="text-rose-600">Error: {recordingError}</p>
+            <p>MIME type: {speech.recordingMimeType ?? "unavailable"}</p>
+            <p>Blob size: {speech.audioBlob?.size ?? 0} bytes</p>
+            <p>Transcript ready: {hasTranscript ? "yes" : "no"}</p>
+
+            {speech.transcript ? (
+              <>
+                <p>Language: {speech.transcript.language ?? "unavailable"}</p>
+                <p>Model: {speech.transcript.model}</p>
+                <p>
+                  Duration:{" "}
+                  {speech.transcript.duration_seconds !== null
+                    ? `${speech.transcript.duration_seconds} seconds`
+                    : "unavailable"}
+                </p>
+                <p>Words captured: {speech.transcript.words.length}</p>
+                <p>Segments captured: {speech.transcript.segments.length}</p>
+              </>
+            ) : null}
+
+            {speech.recordingError ? (
+              <p className="text-rose-600">Recording error: {speech.recordingError}</p>
+            ) : null}
+
+            {speech.processingError ? (
+              <p className="text-rose-600">
+                Transcription error: {speech.processingError}
+              </p>
             ) : null}
           </div>
+
+          {canRetryTranscription ? (
+            <div className="mt-4">
+              <Button
+                onClick={() => {
+                  void processCompletedSpeech();
+                }}
+                size="sm"
+                variant="outline"
+              >
+                Retry transcription
+              </Button>
+            </div>
+          ) : null}
         </div>
       </div>
     </article>

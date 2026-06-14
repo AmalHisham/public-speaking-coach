@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 
 import { BackendSessionStatus } from "@/features/auth/components/backend-session-status";
 import { SessionControls } from "@/features/session/components/session-controls";
+import { LiveTranscript } from "@/features/speech/components/live-transcript";
+import { SpeechTranscriptionSync } from "@/features/speech/components/speech-transcription-sync";
 
 export default async function AppPage() {
   const { userId } = await auth();
@@ -14,6 +16,7 @@ export default async function AppPage() {
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,_#fef3c7,_transparent_28%),linear-gradient(180deg,_#fffaf0_0%,_#ffffff_55%,_#f5f5f4_100%)] px-6 py-10 sm:px-10">
+      <SpeechTranscriptionSync />
       <section className="mx-auto flex w-full max-w-5xl flex-col gap-8">
         <header className="flex flex-col gap-6 rounded-[2rem] border border-stone-200 bg-white/85 p-8 shadow-sm shadow-stone-200/60 backdrop-blur sm:flex-row sm:items-start sm:justify-between">
           <div className="space-y-3">
@@ -35,7 +38,10 @@ export default async function AppPage() {
         </header>
 
         <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)]">
-          <SessionControls />
+          <div className="flex flex-col gap-6">
+            <SessionControls />
+            <LiveTranscript />
+          </div>
 
           <BackendSessionStatus />
         </section>
