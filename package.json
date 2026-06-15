@@ -8,6 +8,7 @@
   "scripts": {
     "build:web": "npm --workspace @public-speaking-coach/web run build",
     "lint:web": "npm --workspace @public-speaking-coach/web run lint",
+    "typecheck:web": "npm --workspace @public-speaking-coach/web run typecheck",
     "dev:web": "npm --workspace @public-speaking-coach/web run dev"
   }
 }

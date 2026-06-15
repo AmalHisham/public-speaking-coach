@@ -113,6 +113,24 @@ test("passes abort signals through to the upload request", async () => {
   );
 });
 
+test("maps network fetch failures to an actionable backend reachability message", async () => {
+  await assert.rejects(
+    requestSpeechTranscription({
+      apiBaseUrl: "https://api.public-speaking-coach.test",
+      audioBlob: new Blob(["steady pacing"], { type: "audio/webm" }),
+      fetchImplementation: async () => {
+        throw new TypeError("Failed to fetch");
+      },
+      recordingMimeType: "audio/webm",
+      token: "clerk-token",
+    }),
+    {
+      message:
+        "The transcription backend could not be reached at https://api.public-speaking-coach.test. Confirm the FastAPI server is running and that NEXT_PUBLIC_API_BASE_URL and CORS_ALLOWED_ORIGINS match this frontend origin.",
+    },
+  );
+});
+
 test("returns the normalized transcript payload on success", async () => {
   const transcript = await requestSpeechTranscription({
     audioBlob: new Blob(["steady pacing"], { type: "audio/webm" }),
@@ -166,6 +184,33 @@ test("surfaces backend transcription failures", async () => {
     }),
     {
       message: "OpenAI transcription failed.",
+    },
+  );
+});
+
+test("maps backend transcription configuration failures to an actionable message", async () => {
+  await assert.rejects(
+    requestSpeechTranscription({
+      audioBlob: new Blob(["steady pacing"], { type: "audio/webm" }),
+      fetchImplementation: async () =>
+        new Response(
+          JSON.stringify({
+            detail:
+              "OPENAI_API_KEY must be configured for transcription routes. Set it in the API environment and restart the backend.",
+          }),
+          {
+            headers: {
+              "Content-Type": "application/json",
+            },
+            status: 503,
+          },
+        ),
+      recordingMimeType: "audio/webm",
+      token: "clerk-token",
+    }),
+    {
+      message:
+        "Backend transcription is not configured. Set OPENAI_API_KEY for the API and restart the backend.",
     },
   );
 });

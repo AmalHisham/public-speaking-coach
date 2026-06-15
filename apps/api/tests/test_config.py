@@ -85,6 +85,21 @@ def test_settings_reads_openai_api_key_from_environment(monkeypatch) -> None:
     assert settings.transcription_max_upload_bytes == 1_048_576
 
 
+def test_settings_treats_blank_optional_secrets_as_unset(monkeypatch) -> None:
+    monkeypatch.setenv("DATABASE_HOST", "localhost")
+    monkeypatch.setenv("DATABASE_PORT", "5432")
+    monkeypatch.setenv("DATABASE_NAME", "public_speaking_coach")
+    monkeypatch.setenv("DATABASE_USER", "postgres")
+    monkeypatch.setenv("DATABASE_PASSWORD", "postgres")
+    monkeypatch.setenv("CLERK_SECRET_KEY", "   ")
+    monkeypatch.setenv("OPENAI_API_KEY", "   ")
+
+    settings = Settings()
+
+    assert settings.clerk_secret_key is None
+    assert settings.openai_api_key is None
+
+
 def test_settings_accepts_openai_api_key_in_direct_configuration() -> None:
     settings = Settings(
         database_host="localhost",

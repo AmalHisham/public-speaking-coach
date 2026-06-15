@@ -54,7 +54,7 @@ class HTTPXClientProtocol(Protocol):
         url: str,
         *,
         headers: dict[str, str],
-        data: list[tuple[str, str]],
+        data: dict[str, str],
         files: dict[str, tuple[str, bytes, str]],
     ) -> HTTPXResponseProtocol:
         ...
@@ -82,11 +82,11 @@ class OpenAITranscriptionIntegration:
                 headers={
                     "Authorization": f"Bearer {self._api_key}",
                 },
-                data=[
-                    ("model", WHISPER_MODEL),
-                    ("response_format", VERBOSE_JSON_RESPONSE_FORMAT),
-                    ("timestamp_granularities[]", "word"),
-                ],
+                data={
+                    "model": WHISPER_MODEL,
+                    "response_format": VERBOSE_JSON_RESPONSE_FORMAT,
+                    "timestamp_granularities[]": "word",
+                },
                 files={
                     "file": (
                         filename,

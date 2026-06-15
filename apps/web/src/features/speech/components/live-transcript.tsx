@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import type { SpeechTranscription } from "@/features/speech/lib/transcription-client";
 import { useSessionStore } from "@/stores/session-store";
 
 function getSpeechDescription(
@@ -39,6 +40,22 @@ function getSpeechDescription(
   }
 }
 
+export function getTranscriptDisplayText(
+  transcript: SpeechTranscription | null,
+): string | null {
+  if (transcript === null) {
+    return null;
+  }
+
+  const normalizedText = transcript.text.trim();
+
+  if (normalizedText.length === 0) {
+    return null;
+  }
+
+  return normalizedText;
+}
+
 export function LiveTranscript() {
   const processCompletedSpeech = useSessionStore(
     (state) => state.processCompletedSpeech,
@@ -46,6 +63,7 @@ export function LiveTranscript() {
   const sessionStatus = useSessionStore((state) => state.status);
   const speech = useSessionStore((state) => state.speech);
   const hasAudioBlob = speech.audioBlob !== null;
+  const transcriptText = getTranscriptDisplayText(speech.transcript);
   const canRetryTranscription =
     sessionStatus === "COMPLETED" &&
     speech.audioBlob !== null &&
@@ -96,6 +114,17 @@ export function LiveTranscript() {
                 </p>
                 <p>Words captured: {speech.transcript.words.length}</p>
                 <p>Segments captured: {speech.transcript.segments.length}</p>
+
+                {transcriptText ? (
+                  <div className="mt-4 rounded-[1rem] border border-stone-200 bg-stone-50 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">
+                      Transcript
+                    </p>
+                    <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-stone-800">
+                      {transcriptText}
+                    </p>
+                  </div>
+                ) : null}
               </>
             ) : null}
 

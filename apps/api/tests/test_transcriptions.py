@@ -226,7 +226,8 @@ def test_transcriptions_route_returns_service_unavailable_when_openai_key_is_mis
 
     def fail_to_build_service() -> SuccessfulTranscriptionService:
         raise TranscriptionConfigurationError(
-            "OPENAI_API_KEY must be configured for transcription routes."
+            "OPENAI_API_KEY must be configured for transcription routes. "
+            "Set it in the API environment and restart the backend."
         )
 
     app.dependency_overrides[get_auth_service] = override_auth_service
@@ -253,7 +254,10 @@ def test_transcriptions_route_returns_service_unavailable_when_openai_key_is_mis
 
         assert response.status_code == 503
         assert response.json() == {
-            "detail": "OPENAI_API_KEY must be configured for transcription routes.",
+            "detail": (
+                "OPENAI_API_KEY must be configured for transcription routes. "
+                "Set it in the API environment and restart the backend."
+            ),
         }
     finally:
         app.dependency_overrides.clear()

@@ -140,6 +140,16 @@ async function readFailureMessage(response: Response): Promise<string> {
     const payload = (await response.json()) as unknown;
 
     if (isRecord(payload) && typeof payload.detail === "string") {
+      if (
+        response.status === 503 &&
+        payload.detail.includes("OPENAI_API_KEY must be configured")
+      ) {
+        return (
+          "Backend transcription is not configured. " +
+          "Set OPENAI_API_KEY for the API and restart the backend."
+        );
+      }
+
       return payload.detail;
     }
   } catch (error) {
@@ -149,6 +159,26 @@ async function readFailureMessage(response: Response): Promise<string> {
   }
 
   return `Transcription request failed with status ${response.status}.`;
+}
+
+function normalizeRequestError(error: unknown, apiBaseUrl: string): Error {
+  if (error instanceof Error && error.name === "AbortError") {
+    return error;
+  }
+
+  if (error instanceof TypeError) {
+    return new Error(
+      `The transcription backend could not be reached at ${apiBaseUrl}. ` +
+        "Confirm the FastAPI server is running and that " +
+        "NEXT_PUBLIC_API_BASE_URL and CORS_ALLOWED_ORIGINS match this frontend origin.",
+    );
+  }
+
+  if (error instanceof Error) {
+    return error;
+  }
+
+  return new Error("Audio transcription failed.");
 }
 
 export async function requestSpeechTranscription({
@@ -171,18 +201,22 @@ export async function requestSpeechTranscription({
 
   formData.append("audio", audioBlob, `session-recording.${extension}`);
 
-  const responsePromise = fetchImplementation(`${apiBaseUrl}/transcriptions`, {
-    body: formData,
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-    method: "POST",
-    signal,
-  });
-
   onStatusChange?.("transcribing");
 
-  const response = await responsePromise;
+  let response: Response;
+
+  try {
+    response = await fetchImplementation(`${apiBaseUrl}/transcriptions`, {
+      body: formData,
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      method: "POST",
+      signal,
+    });
+  } catch (error) {
+    throw normalizeRequestError(error, apiBaseUrl);
+  }
 
   if (!response.ok) {
     throw new Error(await readFailureMessage(response));

@@ -172,7 +172,16 @@ def get_transcription_service() -> TranscriptionService:
 def _get_openai_api_key(settings: Settings) -> str:
     if settings.openai_api_key is None:
         raise TranscriptionConfigurationError(
-            "OPENAI_API_KEY must be configured for transcription routes."
+            "OPENAI_API_KEY must be configured for transcription routes. "
+            "Set it in the API environment and restart the backend."
         )
 
-    return settings.openai_api_key.get_secret_value()
+    api_key = settings.openai_api_key.get_secret_value().strip()
+
+    if api_key == "":
+        raise TranscriptionConfigurationError(
+            "OPENAI_API_KEY must be configured for transcription routes. "
+            "Set it in the API environment and restart the backend."
+        )
+
+    return api_key

@@ -41,6 +41,14 @@ class Settings(BaseSettings):
 
         return value
 
+    @field_validator("clerk_secret_key", "openai_api_key", mode="before")
+    @classmethod
+    def normalize_optional_secrets(cls, value: Any) -> Any:
+        if isinstance(value, str) and value.strip() == "":
+            return None
+
+        return value
+
     @property
     def database_url(self) -> URL:
         return URL.create(
