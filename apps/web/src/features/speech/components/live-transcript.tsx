@@ -1,7 +1,15 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import type { SpeechTranscription } from "@/features/speech/lib/transcription-client";
+import {
+  SpeakingPaceMetric,
+  type SpeakingPaceMetricProps,
+} from "@/features/metrics/components/speaking-pace-metric";
+import type {
+  SpeechProcessingStatus,
+  SpeechTranscription,
+} from "@/features/speech/lib/transcription-client";
+import type { SessionTimerState } from "@/features/session/lib/session-timer";
 import { useSessionStore } from "@/stores/session-store";
 
 function getSpeechDescription(
@@ -56,14 +64,35 @@ export function getTranscriptDisplayText(
   return normalizedText;
 }
 
+type SpeakingPaceMetricSpeechState = {
+  processingStatus: SpeechProcessingStatus;
+  transcript: SpeechTranscription | null;
+};
+
+export function getSpeakingPaceMetricProps(
+  speech: SpeakingPaceMetricSpeechState,
+  timer: Pick<SessionTimerState, "elapsedMs">,
+): SpeakingPaceMetricProps {
+  return {
+    sessionDurationMs: timer.elapsedMs,
+    // The current app finalizes transcript text through the Whisper-backed
+    // transcription pipeline, so a failed processing state is the runtime
+    // mapping of the SPK-001 transcript-generation failure condition.
+    transcriptGenerationFailed: speech.processingStatus === "failed",
+    transcript: speech.transcript,
+  };
+}
+
 export function LiveTranscript() {
   const processCompletedSpeech = useSessionStore(
     (state) => state.processCompletedSpeech,
   );
   const sessionStatus = useSessionStore((state) => state.status);
   const speech = useSessionStore((state) => state.speech);
+  const timer = useSessionStore((state) => state.timer);
   const hasAudioBlob = speech.audioBlob !== null;
   const transcriptText = getTranscriptDisplayText(speech.transcript);
+  const speakingPaceMetricProps = getSpeakingPaceMetricProps(speech, timer);
   const canRetryTranscription =
     sessionStatus === "COMPLETED" &&
     speech.audioBlob !== null &&
@@ -126,6 +155,10 @@ export function LiveTranscript() {
                   </div>
                 ) : null}
               </>
+            ) : null}
+
+            {sessionStatus === "COMPLETED" ? (
+              <SpeakingPaceMetric {...speakingPaceMetricProps} />
             ) : null}
 
             {speech.recordingError ? (
