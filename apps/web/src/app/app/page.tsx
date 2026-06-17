@@ -3,6 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 
 import { BackendSessionStatus } from "@/features/auth/components/backend-session-status";
+import { SessionCameraPreview } from "@/features/session/components/session-camera-preview";
 import { SessionControls } from "@/features/session/components/session-controls";
 import { LiveTranscript } from "@/features/speech/components/live-transcript";
 import { SpeechTranscriptionSync } from "@/features/speech/components/speech-transcription-sync";
@@ -40,6 +41,7 @@ export default async function AppPage() {
         <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)]">
           <div className="flex flex-col gap-6">
             <SessionControls />
+            <SessionCameraPreview />
             <LiveTranscript />
           </div>
 
