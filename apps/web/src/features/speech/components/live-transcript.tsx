@@ -2,6 +2,10 @@
 
 import { Button } from "@/components/ui/button";
 import {
+  FillerUsageMetric,
+  type FillerUsageMetricProps,
+} from "@/features/metrics/components/filler-usage-metric";
+import {
   SpeakingPaceMetric,
   type SpeakingPaceMetricProps,
 } from "@/features/metrics/components/speaking-pace-metric";
@@ -64,13 +68,25 @@ export function getTranscriptDisplayText(
   return normalizedText;
 }
 
-type SpeakingPaceMetricSpeechState = {
+type SpeechMetricTranscriptState = {
   processingStatus: SpeechProcessingStatus;
   transcript: SpeechTranscription | null;
 };
 
+export function getFillerUsageMetricProps(
+  speech: SpeechMetricTranscriptState,
+): FillerUsageMetricProps {
+  return {
+    // The current app finalizes transcript text through the Whisper-backed
+    // transcription pipeline, so a failed processing state is the runtime
+    // mapping of the SPK-002 speech-recognition failure condition.
+    transcriptGenerationFailed: speech.processingStatus === "failed",
+    transcript: speech.transcript,
+  };
+}
+
 export function getSpeakingPaceMetricProps(
-  speech: SpeakingPaceMetricSpeechState,
+  speech: SpeechMetricTranscriptState,
   timer: Pick<SessionTimerState, "elapsedMs">,
 ): SpeakingPaceMetricProps {
   return {
@@ -92,6 +108,7 @@ export function LiveTranscript() {
   const timer = useSessionStore((state) => state.timer);
   const hasAudioBlob = speech.audioBlob !== null;
   const transcriptText = getTranscriptDisplayText(speech.transcript);
+  const fillerUsageMetricProps = getFillerUsageMetricProps(speech);
   const speakingPaceMetricProps = getSpeakingPaceMetricProps(speech, timer);
   const canRetryTranscription =
     sessionStatus === "COMPLETED" &&
@@ -158,7 +175,10 @@ export function LiveTranscript() {
             ) : null}
 
             {sessionStatus === "COMPLETED" ? (
-              <SpeakingPaceMetric {...speakingPaceMetricProps} />
+              <>
+                <SpeakingPaceMetric {...speakingPaceMetricProps} />
+                <FillerUsageMetric {...fillerUsageMetricProps} />
+              </>
             ) : null}
 
             {speech.recordingError ? (

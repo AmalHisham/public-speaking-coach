@@ -28,10 +28,14 @@ export function SessionControls() {
   const error = useSessionStore((state) => state.error);
   const requestStart = useSessionStore((state) => state.requestStart);
   const requestStop = useSessionStore((state) => state.requestStop);
+  const speechProcessingStatus = useSessionStore(
+    (state) => state.speech.processingStatus,
+  );
   const status = useSessionStore((state) => state.status);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const viewModel = getSessionControlsViewModel({
+    processingStatus: speechProcessingStatus,
     status,
   });
   const statusError = actionError ?? error;

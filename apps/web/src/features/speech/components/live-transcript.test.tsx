@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  getFillerUsageMetricProps,
   getSpeakingPaceMetricProps,
   getTranscriptDisplayText,
 } from "@/features/speech/components/live-transcript";
@@ -77,6 +78,25 @@ test("maps the canonical speech transcript and timer elapsed time into speaking 
   assert.equal(metricProps.transcriptGenerationFailed, false);
 });
 
+test("maps the canonical speech transcript into filler usage props", () => {
+  const transcript = {
+    duration_seconds: 42,
+    language: "en",
+    model: "whisper-1",
+    segments: [],
+    text: "steady pacing",
+    words: [],
+  };
+
+  const metricProps = getFillerUsageMetricProps({
+    processingStatus: "transcript_ready",
+    transcript,
+  });
+
+  assert.equal(metricProps.transcript, transcript);
+  assert.equal(metricProps.transcriptGenerationFailed, false);
+});
+
 test("maps failed transcript processing into the speaking pace unavailable state", () => {
   const metricProps = getSpeakingPaceMetricProps(
     {
@@ -89,6 +109,16 @@ test("maps failed transcript processing into the speaking pace unavailable state
   );
 
   assert.equal(metricProps.sessionDurationMs, 12_000);
+  assert.equal(metricProps.transcript, null);
+  assert.equal(metricProps.transcriptGenerationFailed, true);
+});
+
+test("maps failed transcript processing into the filler usage unavailable state", () => {
+  const metricProps = getFillerUsageMetricProps({
+    processingStatus: "failed",
+    transcript: null,
+  });
+
   assert.equal(metricProps.transcript, null);
   assert.equal(metricProps.transcriptGenerationFailed, true);
 });
