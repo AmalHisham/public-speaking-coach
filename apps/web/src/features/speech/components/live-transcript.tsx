@@ -5,16 +5,22 @@ import {
   FillerUsageMetric,
   type FillerUsageMetricProps,
 } from "@/features/metrics/components/filler-usage-metric";
+import { PauseQualityMetric } from "@/features/metrics/components/pause-quality-metric";
 import {
   SpeakingPaceMetric,
   type SpeakingPaceMetricProps,
 } from "@/features/metrics/components/speaking-pace-metric";
+import type { AudioSilenceAnalysisResult } from "@/features/speech/lib/audio-silence-analysis";
+import { analyzeAudioSilence } from "@/features/speech/lib/audio-silence-analysis";
 import type {
   SpeechProcessingStatus,
   SpeechTranscription,
+  SpeechTranscriptionWord,
 } from "@/features/speech/lib/transcription-client";
 import type { SessionTimerState } from "@/features/session/lib/session-timer";
+import type { SessionStatus } from "@/types/session";
 import { useSessionStore } from "@/stores/session-store";
+import { useEffect, useState } from "react";
 
 function getSpeechDescription(
   processingStatus:
@@ -73,6 +79,25 @@ type SpeechMetricTranscriptState = {
   transcript: SpeechTranscription | null;
 };
 
+type PauseQualityMetricSpeechState = {
+  audioBlob: Blob | null;
+  processingStatus: SpeechProcessingStatus;
+  recordingStatus: "failed" | "idle" | "recorded" | "recording";
+  transcript: SpeechTranscription | null;
+};
+
+type PauseQualityAnalysisSnapshot = {
+  analysis: AudioSilenceAnalysisResult;
+  audioBlob: Blob;
+  transcriptWords: readonly SpeechTranscriptionWord[] | null;
+};
+
+export type PauseQualityAnalysisInput = {
+  audioBlob: Blob | null;
+  shouldAnalyze: boolean;
+  transcriptWords: readonly SpeechTranscriptionWord[] | null;
+};
+
 export function getFillerUsageMetricProps(
   speech: SpeechMetricTranscriptState,
 ): FillerUsageMetricProps {
@@ -99,6 +124,34 @@ export function getSpeakingPaceMetricProps(
   };
 }
 
+export function getPauseQualityAnalysisInput(
+  sessionStatus: SessionStatus,
+  speech: PauseQualityMetricSpeechState,
+): PauseQualityAnalysisInput {
+  return {
+    audioBlob: speech.audioBlob,
+    shouldAnalyze:
+      sessionStatus === "COMPLETED" &&
+      speech.audioBlob !== null &&
+      speech.recordingStatus === "recorded" &&
+      (speech.processingStatus === "failed" ||
+        speech.processingStatus === "transcript_ready"),
+    transcriptWords: speech.transcript?.words ?? null,
+  };
+}
+
+function matchesPauseQualityAnalysisSnapshot(
+  snapshot: PauseQualityAnalysisSnapshot | null,
+  analysisInput: PauseQualityAnalysisInput,
+): snapshot is PauseQualityAnalysisSnapshot {
+  return (
+    snapshot !== null &&
+    analysisInput.audioBlob !== null &&
+    snapshot.audioBlob === analysisInput.audioBlob &&
+    snapshot.transcriptWords === analysisInput.transcriptWords
+  );
+}
+
 export function LiveTranscript() {
   const processCompletedSpeech = useSessionStore(
     (state) => state.processCompletedSpeech,
@@ -106,9 +159,15 @@ export function LiveTranscript() {
   const sessionStatus = useSessionStore((state) => state.status);
   const speech = useSessionStore((state) => state.speech);
   const timer = useSessionStore((state) => state.timer);
+  const [pauseQualityAnalysisSnapshot, setPauseQualityAnalysisSnapshot] =
+    useState<PauseQualityAnalysisSnapshot | null>(null);
   const hasAudioBlob = speech.audioBlob !== null;
   const transcriptText = getTranscriptDisplayText(speech.transcript);
   const fillerUsageMetricProps = getFillerUsageMetricProps(speech);
+  const pauseQualityAnalysisInput = getPauseQualityAnalysisInput(
+    sessionStatus,
+    speech,
+  );
   const speakingPaceMetricProps = getSpeakingPaceMetricProps(speech, timer);
   const canRetryTranscription =
     sessionStatus === "COMPLETED" &&
@@ -116,6 +175,58 @@ export function LiveTranscript() {
     speech.processingStatus === "failed" &&
     speech.recordingStatus === "recorded";
   const hasTranscript = speech.transcript !== null;
+  const pauseQualityAnalysis: AudioSilenceAnalysisResult | null =
+    sessionStatus !== "COMPLETED"
+      ? null
+      : speech.audioBlob === null
+        ? {
+            reason: "audio_unavailable",
+            status: "unavailable",
+          }
+        : !pauseQualityAnalysisInput.shouldAnalyze
+          ? null
+          : matchesPauseQualityAnalysisSnapshot(
+                pauseQualityAnalysisSnapshot,
+                pauseQualityAnalysisInput,
+              )
+            ? pauseQualityAnalysisSnapshot.analysis
+            : null;
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    if (
+      !pauseQualityAnalysisInput.shouldAnalyze ||
+      pauseQualityAnalysisInput.audioBlob === null
+    ) {
+      return () => {
+        isCancelled = true;
+      };
+    }
+
+    const audioBlob = pauseQualityAnalysisInput.audioBlob;
+
+    void analyzeAudioSilence({
+      audioBlob,
+      transcriptWords: pauseQualityAnalysisInput.transcriptWords,
+    }).then((analysis) => {
+      if (!isCancelled) {
+        setPauseQualityAnalysisSnapshot({
+          analysis,
+          audioBlob,
+          transcriptWords: pauseQualityAnalysisInput.transcriptWords,
+        });
+      }
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    pauseQualityAnalysisInput.audioBlob,
+    pauseQualityAnalysisInput.shouldAnalyze,
+    pauseQualityAnalysisInput.transcriptWords,
+  ]);
 
   return (
     <article className="rounded-[2rem] border border-stone-200 bg-white p-8 shadow-sm shadow-stone-200/60">
@@ -178,6 +289,7 @@ export function LiveTranscript() {
               <>
                 <SpeakingPaceMetric {...speakingPaceMetricProps} />
                 <FillerUsageMetric {...fillerUsageMetricProps} />
+                <PauseQualityMetric analysis={pauseQualityAnalysis} />
               </>
             ) : null}
 

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   getFillerUsageMetricProps,
+  getPauseQualityAnalysisInput,
   getSpeakingPaceMetricProps,
   getTranscriptDisplayText,
 } from "@/features/speech/components/live-transcript";
@@ -121,4 +122,45 @@ test("maps failed transcript processing into the filler usage unavailable state"
 
   assert.equal(metricProps.transcript, null);
   assert.equal(metricProps.transcriptGenerationFailed, true);
+});
+
+test("starts pause-quality analysis when the completed session has audio and word timestamps", () => {
+  const audioBlob = new Blob(["steady pacing"], { type: "audio/webm" });
+  const transcript = {
+    duration_seconds: 42,
+    language: "en",
+    model: "whisper-1",
+    segments: [],
+    text: "steady pacing",
+    words: [
+      {
+        end: 0.5,
+        start: 0.0,
+        word: "steady",
+      },
+    ],
+  };
+
+  const analysisInput = getPauseQualityAnalysisInput("COMPLETED", {
+    audioBlob,
+    processingStatus: "transcript_ready",
+    recordingStatus: "recorded",
+    transcript,
+  });
+
+  assert.equal(analysisInput.shouldAnalyze, true);
+  assert.equal(analysisInput.audioBlob, audioBlob);
+  assert.equal(analysisInput.transcriptWords, transcript.words);
+});
+
+test("waits for a final transcription state before pause-quality analysis begins", () => {
+  const analysisInput = getPauseQualityAnalysisInput("COMPLETED", {
+    audioBlob: new Blob(["steady pacing"], { type: "audio/webm" }),
+    processingStatus: "transcribing",
+    recordingStatus: "recorded",
+    transcript: null,
+  });
+
+  assert.equal(analysisInput.shouldAnalyze, false);
+  assert.equal(analysisInput.transcriptWords, null);
 });
