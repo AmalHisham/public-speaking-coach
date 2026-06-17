@@ -36,7 +36,16 @@ import {
   type SpeechProcessingStatus,
   type SpeechTranscription,
 } from "@/features/speech/lib/transcription-client";
+import {
+  createVisionServices,
+  type VisionServices,
+  type VisionServicesFactory,
+} from "@/features/vision/lib/vision-services";
 import type { SessionEvent, SessionMachineState } from "@/types/session";
+import type {
+  FaceLandmarkerLatestResult,
+  PoseLandmarkerLatestResult,
+} from "@/types/vision";
 
 type SpeechProcessingState = {
   processingError: string | null;
@@ -73,6 +82,8 @@ type SessionStoreState = SessionMachineState & {
 
 type SessionStore = SessionStoreState & {
   failActive: (error: string) => void;
+  getLatestFaceLandmarkerResult: () => FaceLandmarkerLatestResult;
+  getLatestPoseLandmarkerResult: () => PoseLandmarkerLatestResult;
   processCompletedSpeech: () => Promise<void>;
   requestStart: () => Promise<void>;
   requestStop: () => Promise<void>;
@@ -80,6 +91,7 @@ type SessionStore = SessionStoreState & {
   setSpeechTranscriptionRequester: (
     requester: SpeechTranscriptionRequester | null,
   ) => void;
+  setVisionServicesFactory: (factory: VisionServicesFactory) => void;
 };
 
 function applyLifecycleEvent(
@@ -105,6 +117,8 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   let activeSpeechProcessingAbortController: AbortController | null = null;
   let activeSpeechProcessingToken = 0;
   let speechTranscriptionRequester: SpeechTranscriptionRequester | null = null;
+  let visionServicesFactory: VisionServicesFactory = createVisionServices;
+  let visionServices: VisionServices = visionServicesFactory();
 
   const createMediaRecordingToken = () => {
     activeMediaRecordingToken += 1;
@@ -192,6 +206,37 @@ export const useSessionStore = create<SessionStore>((set, get) => {
 
       return nextState;
     });
+
+  const stopVisionProcessing = () => {
+    visionServices.faceLandmarker.stop();
+    visionServices.poseLandmarker.stop();
+  };
+
+  const startVisionProcessing = async (stream: MediaStream) => {
+    await Promise.all([
+      visionServices.faceLandmarker.start({
+        stream,
+      }),
+      visionServices.poseLandmarker.start({
+        stream,
+      }),
+    ]);
+
+    const faceResult = visionServices.faceLandmarker.getLatestResult();
+    const poseResult = visionServices.poseLandmarker.getLatestResult();
+
+    if (faceResult.serviceStatus === "failed" && faceResult.error !== null) {
+      stopVisionProcessing();
+
+      throw new Error(faceResult.error.message);
+    }
+
+    if (poseResult.serviceStatus === "failed" && poseResult.error !== null) {
+      stopVisionProcessing();
+
+      throw new Error(poseResult.error.message);
+    }
+  };
 
   const processCompletedSpeech = async () => {
     const requester = speechTranscriptionRequester;
@@ -354,6 +399,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     camera?: CameraState,
     microphone: MicrophoneState = initialMicrophoneState,
   ) => {
+    stopVisionProcessing();
     abortActiveSpeechProcessing({
       invalidate: true,
     });
@@ -374,6 +420,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   };
 
   const failActiveSession = (error: string) => {
+    stopVisionProcessing();
     void stopMediaRecording({
       invalidate: true,
     });
@@ -491,8 +538,13 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     speech: initialSpeechState,
     timer: initialSessionTimerState,
     failActive: failActiveSession,
+    getLatestFaceLandmarkerResult: () =>
+      visionServices.faceLandmarker.getLatestResult(),
+    getLatestPoseLandmarkerResult: () =>
+      visionServices.poseLandmarker.getLatestResult(),
     processCompletedSpeech,
     requestStart: async () => {
+      stopVisionProcessing();
       await stopMediaRecording({
         invalidate: true,
       });
@@ -537,6 +589,24 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       const microphoneResult = await requestMicrophonePermission();
 
       if (microphoneResult.status === "granted") {
+        try {
+          await startVisionProcessing(cameraResult.stream);
+        } catch (error) {
+          stopMicrophoneStream(microphoneResult.stream);
+          failStart(
+            error instanceof Error
+              ? error.message
+              : "MediaPipe initialization failed.",
+            undefined,
+            {
+              permission: microphoneResult.permission,
+              stream: null,
+            },
+          );
+
+          return;
+        }
+
         completeStart({
           permission: microphoneResult.permission,
           stream: microphoneResult.stream,
@@ -567,12 +637,14 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         ),
       );
 
+      stopVisionProcessing();
       await stopMediaRecording();
 
       completeStop();
       void processCompletedSpeech();
     },
     reset: () => {
+      stopVisionProcessing();
       void stopMediaRecording({
         invalidate: true,
       });
@@ -604,6 +676,11 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       if (requester !== null) {
         void processCompletedSpeech();
       }
+    },
+    setVisionServicesFactory: (factory) => {
+      stopVisionProcessing();
+      visionServicesFactory = factory;
+      visionServices = visionServicesFactory();
     },
   };
 });

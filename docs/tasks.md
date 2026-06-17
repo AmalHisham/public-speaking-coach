@@ -631,3 +631,16 @@ Users can:
 
 Only after all items pass is MVP considered complete.
 
+---
+
+# **Follow-up Tasks**
+
+## **TASK-3005**
+
+Align session startup tests with the MediaPipe-before-ACTIVE contract.
+
+Acceptance Criteria:
+
+* `webcam-permission.test.ts` injects mock vision services for session-start tests  
+* Session-start assertions reflect vision initialization before `ACTIVE`  
+* Session test doubles cover the current startup contract without relying on default MediaPipe browser setup

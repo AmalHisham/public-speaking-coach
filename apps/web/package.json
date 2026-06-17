@@ -7,12 +7,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --import tsx --test src/features/session/lib/session-state-machine.test.ts src/features/session/lib/session-timer.test.ts src/features/session/lib/webcam-permission.test.ts src/features/session/lib/session-controls.test.ts src/features/speech/components/live-transcript.test.tsx src/features/speech/lib/speech-recognition.test.ts src/features/speech/lib/media-recorder.test.ts src/features/speech/lib/transcription-client.test.ts src/features/speech/lib/audio-silence-analysis.test.ts src/features/metrics/lib/speaking-pace.test.ts src/features/metrics/lib/filler-usage.test.ts src/features/metrics/lib/pause-quality.test.ts src/features/metrics/components/speaking-pace-metric.test.tsx src/features/metrics/components/filler-usage-metric.test.tsx src/features/metrics/components/pause-quality-metric.test.tsx",
+    "test": "node --import tsx --test src/features/session/lib/session-state-machine.test.ts src/features/session/lib/session-timer.test.ts src/features/session/lib/webcam-permission.test.ts src/features/session/lib/session-controls.test.ts src/features/speech/components/live-transcript.test.tsx src/features/speech/lib/speech-recognition.test.ts src/features/speech/lib/media-recorder.test.ts src/features/speech/lib/transcription-client.test.ts src/features/speech/lib/audio-silence-analysis.test.ts src/features/metrics/lib/speaking-pace.test.ts src/features/metrics/lib/filler-usage.test.ts src/features/metrics/lib/pause-quality.test.ts src/features/metrics/components/speaking-pace-metric.test.tsx src/features/metrics/components/filler-usage-metric.test.tsx src/features/metrics/components/pause-quality-metric.test.tsx src/features/vision/lib/face-landmarker-service.test.ts src/features/vision/lib/pose-landmarker-service.test.ts src/features/vision/lib/vision-session-integration.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",
     "@clerk/nextjs": "^7.5.2",
+    "@mediapipe/tasks-vision": "^0.10.35",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.17.0",
